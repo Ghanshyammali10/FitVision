@@ -153,10 +153,138 @@ function fallbackCapture(videoElement) {
 }
 
 // ═══════════════════════════════════════════
-// AUTO-CROP GARMENT — Polygon Clipping
-// Clips to torso polygon (shoulders→hips), removes head/hands/legs
+// ENHANCED AUTO-CROP — Combination Mask Pipeline
 // ═══════════════════════════════════════════
+//
+// Pipeline:
+//  1. segmentation mask (person-vs-bg)
+//  2. pose-based torso polygon (shoulders→hips, arm-clipped)
+//  3. combination mask: keep pixel ONLY if person AND inside torso
+//  4. skin pixel removal (HSV-based)
+//  5. edge smoothing (blur + alpha feather)
+//  6. tight alpha bounding box trim
+//
+// Result: clean shirt-only cutout, no arms/face/skin
 
+// ── Skin Detection (HSV-based) ──
+// Returns true if the pixel is likely exposed skin
+function isSkinPixel(r, g, b) {
+  // Rule 1: RGB thresholds (covers most skin tones)
+  if (r > 95 && g > 40 && b > 20) {
+    const maxC = Math.max(r, g, b);
+    const minC = Math.min(r, g, b);
+    if ((maxC - minC) > 15 && Math.abs(r - g) > 15 && r > g && r > b) {
+      return true;
+    }
+  }
+  // Rule 2: HSV-based detection for broader skin tones
+  // Convert to normalized
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const cMax = Math.max(rn, gn, bn);
+  const cMin = Math.min(rn, gn, bn);
+  const delta = cMax - cMin;
+
+  let h = 0;
+  if (delta > 0) {
+    if (cMax === rn) h = 60 * (((gn - bn) / delta) % 6);
+    else if (cMax === gn) h = 60 * (((bn - rn) / delta) + 2);
+    else h = 60 * (((rn - gn) / delta) + 4);
+    if (h < 0) h += 360;
+  }
+  const s = cMax > 0 ? delta / cMax : 0;
+  const v = cMax;
+
+  // Skin in HSV: H ∈ [0°, 50°], S ∈ [0.1, 0.7], V ∈ [0.2, 1.0]
+  if (h >= 0 && h <= 50 && s >= 0.1 && s <= 0.7 && v >= 0.2) {
+    return true;
+  }
+  return false;
+}
+
+// ── Point-in-Polygon test (ray casting) ──
+function isInsidePolygon(x, y, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0], yi = polygon[i][1];
+    const xj = polygon[j][0], yj = polygon[j][1];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// ── Build torso polygon from pose keypoints ──
+// Returns array of [x, y] points defining the garment region
+function buildTorsoPolygon(keypoints, imgW, imgH) {
+  const kp = {};
+  keypoints.forEach(k => { kp[k.name] = k; });
+
+  const ls = kp['left_shoulder'];
+  const rs = kp['right_shoulder'];
+  const lh = kp['left_hip'];
+  const rh = kp['right_hip'];
+  const le = kp['left_elbow'];
+  const re = kp['right_elbow'];
+
+  if (!ls || !rs || ls.score < 0.3 || rs.score < 0.3) return null;
+
+  const shoulderW = Math.abs(rs.x - ls.x);
+  if (shoulderW < 10) return null;
+
+  // ── Top edge (neck line) ── tighter than before
+  const neckY = Math.min(ls.y, rs.y) - shoulderW * 0.12;
+  const neckCenterX = (ls.x + rs.x) / 2;
+  const neckWidth = shoulderW * 0.20; // narrower neckhole
+
+  // ── Bottom edge (waist) ── slightly above hips, not below
+  let bottomY;
+  if (lh && rh && lh.score > 0.25 && rh.score > 0.25) {
+    bottomY = Math.max(lh.y, rh.y) - shoulderW * 0.05; // tighter
+  } else {
+    bottomY = Math.max(ls.y, rs.y) + shoulderW * 1.2;
+  }
+
+  // ── Side edges ── tighter, use elbows to clip arms
+  let leftX = Math.min(ls.x, rs.x) - shoulderW * 0.25; // tighter (was 0.45)
+  let rightX = Math.max(ls.x, rs.x) + shoulderW * 0.25;
+
+  // Clip inward using elbows (removes arm regions)
+  if (le && le.score > 0.3) {
+    leftX = Math.max(leftX, le.x + shoulderW * 0.05);
+  }
+  if (re && re.score > 0.3) {
+    rightX = Math.min(rightX, re.x - shoulderW * 0.05);
+  }
+
+  // ── Hip-level width ── slightly narrower than shoulders
+  let leftHipX, rightHipX;
+  if (lh && rh && lh.score > 0.25 && rh.score > 0.25) {
+    leftHipX = Math.min(lh.x, rh.x) - shoulderW * 0.15; // tighter (was 0.2)
+    rightHipX = Math.max(lh.x, rh.x) + shoulderW * 0.15;
+  } else {
+    leftHipX = leftX + shoulderW * 0.05;
+    rightHipX = rightX - shoulderW * 0.05;
+  }
+
+  // Clamp helper
+  const c = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  // Build polygon: neckhole shape at top → shoulders → hips → back
+  return [
+    [c(leftX, 0, imgW),              c(neckY, 0, imgH)],         // top-left
+    [c(neckCenterX - neckWidth, 0, imgW), c(neckY, 0, imgH)],    // neckhole left
+    [neckCenterX,                     c(neckY + shoulderW * 0.04, 0, imgH)], // neckhole dip
+    [c(neckCenterX + neckWidth, 0, imgW), c(neckY, 0, imgH)],    // neckhole right
+    [c(rightX, 0, imgW),             c(neckY, 0, imgH)],         // top-right
+    [c(rightX, 0, imgW),             c((neckY + bottomY) * 0.5, 0, imgH)], // mid-right (sleeve line)
+    [c(rightHipX, 0, imgW),          c(bottomY, 0, imgH)],       // bottom-right
+    [c(leftHipX, 0, imgW),           c(bottomY, 0, imgH)],       // bottom-left
+    [c(leftX, 0, imgW),              c((neckY + bottomY) * 0.5, 0, imgH)], // mid-left (sleeve line)
+  ];
+}
+
+// ── Main enhanced crop function ──
 async function autoCropGarment(dataUrl, videoElement) {
   return new Promise(async (resolve) => {
     const img = new Image();
@@ -164,87 +292,91 @@ async function autoCropGarment(dataUrl, videoElement) {
       const sw = img.width;
       const sh = img.height;
 
+      // Draw the bg-removed image
       const srcCanvas = document.createElement('canvas');
       srcCanvas.width = sw;
       srcCanvas.height = sh;
       const srcCtx = srcCanvas.getContext('2d');
       srcCtx.drawImage(img, 0, 0);
 
-      // Pose-based polygon clip
+      // Get pose keypoints from the live video
+      let torsoPolygon = null;
       if (poseDetector && videoElement) {
         try {
           const poses = await poseDetector.estimatePoses(videoElement, { flipHorizontal: false });
           if (poses.length > 0 && poses[0].keypoints) {
-            const kp = {};
-            poses[0].keypoints.forEach(k => { kp[k.name] = k; });
-
-            const ls = kp['left_shoulder'];
-            const rs = kp['right_shoulder'];
-            const lh = kp['left_hip'];
-            const rh = kp['right_hip'];
-            const le = kp['left_elbow'];
-            const re = kp['right_elbow'];
-
-            if (ls && rs && ls.score > 0.3 && rs.score > 0.3) {
-              const shoulderW = Math.abs(rs.x - ls.x);
-              const neckY = Math.min(ls.y, rs.y) - shoulderW * 0.15;
-
-              let bottomY;
-              if (lh && rh && lh.score > 0.25 && rh.score > 0.25) {
-                bottomY = Math.max(lh.y, rh.y) + shoulderW * 0.1;
-              } else {
-                bottomY = Math.max(ls.y, rs.y) + shoulderW * 1.3;
-              }
-
-              let leftX = Math.min(ls.x, rs.x) - shoulderW * 0.45;
-              let rightX = Math.max(ls.x, rs.x) + shoulderW * 0.45;
-
-              if (le && le.score > 0.3) leftX = Math.min(leftX, le.x - shoulderW * 0.1);
-              if (re && re.score > 0.3) rightX = Math.max(rightX, re.x + shoulderW * 0.1);
-
-              let leftHipX, rightHipX;
-              if (lh && rh && lh.score > 0.25 && rh.score > 0.25) {
-                leftHipX = Math.min(lh.x, rh.x) - shoulderW * 0.2;
-                rightHipX = Math.max(lh.x, rh.x) + shoulderW * 0.2;
-              } else {
-                leftHipX = leftX + shoulderW * 0.1;
-                rightHipX = rightX - shoulderW * 0.1;
-              }
-
-              const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-              const neckCenterX = (ls.x + rs.x) / 2;
-              const neckWidth = shoulderW * 0.25;
-
-              const clipCanvas = document.createElement('canvas');
-              clipCanvas.width = sw;
-              clipCanvas.height = sh;
-              const clipCtx = clipCanvas.getContext('2d');
-
-              clipCtx.beginPath();
-              clipCtx.moveTo(clamp(leftX, 0, sw), clamp(neckY, 0, sh));
-              clipCtx.lineTo(clamp(neckCenterX - neckWidth, 0, sw), clamp(neckY, 0, sh));
-              clipCtx.lineTo(neckCenterX, clamp(neckY + shoulderW * 0.05, 0, sh));
-              clipCtx.lineTo(clamp(neckCenterX + neckWidth, 0, sw), clamp(neckY, 0, sh));
-              clipCtx.lineTo(clamp(rightX, 0, sw), clamp(neckY, 0, sh));
-              clipCtx.lineTo(clamp(rightHipX, 0, sw), clamp(bottomY, 0, sh));
-              clipCtx.lineTo(clamp(leftHipX, 0, sw), clamp(bottomY, 0, sh));
-              clipCtx.closePath();
-              clipCtx.clip();
-
-              clipCtx.drawImage(srcCanvas, 0, 0);
-              srcCtx.clearRect(0, 0, sw, sh);
-              srcCtx.drawImage(clipCanvas, 0, 0);
-            }
+            torsoPolygon = buildTorsoPolygon(poses[0].keypoints, sw, sh);
           }
         } catch (e) {
-          console.warn('Pose-based crop failed:', e);
+          console.warn('Pose crop failed:', e);
         }
       }
 
-      // Alpha-trim
-      const bounds = getAlphaBounds(srcCtx, sw, sh);
+      // ── Stage 1: Combination Mask + Skin Removal ──
+      // Process pixel-by-pixel: keep only if inside torso polygon AND not skin
+      const imageData = srcCtx.getImageData(0, 0, sw, sh);
+      const data = imageData.data;
+
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          const idx = (y * sw + x) * 4;
+          const alpha = data[idx + 3];
+
+          // Skip already-transparent pixels (removed by bg segmentation)
+          if (alpha < 30) continue;
+
+          // Check 1: Is pixel inside torso polygon?
+          if (torsoPolygon && !isInsidePolygon(x, y, torsoPolygon)) {
+            data[idx + 3] = 0; // outside torso → remove
+            continue;
+          }
+
+          // Check 2: Is pixel a skin tone? (remove exposed skin)
+          const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+          if (isSkinPixel(r, g, b)) {
+            // Don't aggressively remove inside the core torso — only near edges
+            // (skin near neckline & sleeves is the target, not the whole shirt)
+            if (torsoPolygon) {
+              // Check if pixel is near the polygon edge (within 15% of dimensions)
+              const edgeDist = getEdgeDistance(x, y, torsoPolygon);
+              const threshold = Math.min(sw, sh) * 0.15;
+              if (edgeDist < threshold) {
+                data[idx + 3] = 0; // skin near edge → remove
+              }
+              // else: skin-colored pixel deep inside → probably shirt color, keep
+            }
+          }
+        }
+      }
+
+      srcCtx.putImageData(imageData, 0, 0);
+
+      // ── Stage 2: Edge Smoothing ──
+      // Apply slight blur for smoother edges
+      const smoothCanvas = document.createElement('canvas');
+      smoothCanvas.width = sw;
+      smoothCanvas.height = sh;
+      const smoothCtx = smoothCanvas.getContext('2d');
+      smoothCtx.imageSmoothingEnabled = true;
+      smoothCtx.imageSmoothingQuality = 'high';
+      smoothCtx.filter = 'blur(1.5px)';
+      smoothCtx.drawImage(srcCanvas, 0, 0);
+      smoothCtx.filter = 'none';
+
+      // Alpha feathering: sharpen interior, soften border
+      const smoothData = smoothCtx.getImageData(0, 0, sw, sh);
+      const sd = smoothData.data;
+      for (let i = 3; i < sd.length; i += 4) {
+        if (sd[i] > 200) sd[i] = 255;        // solid interior → fully opaque
+        else if (sd[i] > 30) sd[i] = Math.round(sd[i] * 0.8); // edge → feathered
+        else sd[i] = 0;                        // near-transparent → remove
+      }
+      smoothCtx.putImageData(smoothData, 0, 0);
+
+      // ── Stage 3: Tight Alpha Bounding Box Trim ──
+      const bounds = getAlphaBounds(smoothCtx, sw, sh);
       if (!bounds || bounds.w < 10 || bounds.h < 10) {
-        resolve(dataUrl);
+        resolve(dataUrl); // fallback to original if nothing visible
         return;
       }
 
@@ -252,13 +384,34 @@ async function autoCropGarment(dataUrl, videoElement) {
       finalCanvas.width = bounds.w;
       finalCanvas.height = bounds.h;
       const finalCtx = finalCanvas.getContext('2d');
-      finalCtx.drawImage(srcCanvas, bounds.x, bounds.y, bounds.w, bounds.h, 0, 0, bounds.w, bounds.h);
+      finalCtx.imageSmoothingEnabled = true;
+      finalCtx.imageSmoothingQuality = 'high';
+      finalCtx.drawImage(smoothCanvas, bounds.x, bounds.y, bounds.w, bounds.h, 0, 0, bounds.w, bounds.h);
       resolve(finalCanvas.toDataURL('image/png'));
     };
     img.src = dataUrl;
   });
 }
 
+// ── Minimum distance from point to any polygon edge ──
+function getEdgeDistance(px, py, polygon) {
+  let minDist = Infinity;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [x1, y1] = polygon[j];
+    const [x2, y2] = polygon[i];
+    // Point-to-line-segment distance
+    const dx = x2 - x1, dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq > 0 ? ((px - x1) * dx + (py - y1) * dy) / lenSq : 0;
+    t = Math.max(0, Math.min(1, t));
+    const cx = x1 + t * dx, cy = y1 + t * dy;
+    const dist = Math.sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
+    if (dist < minDist) minDist = dist;
+  }
+  return minDist;
+}
+
+// ── Tight alpha bounding box ──
 function getAlphaBounds(ctx, w, h) {
   const imageData = ctx.getImageData(0, 0, w, h);
   const data = imageData.data;
@@ -277,7 +430,7 @@ function getAlphaBounds(ctx, w, h) {
     }
   }
   if (!found) return null;
-  const pad = 4;
+  const pad = 2; // tighter padding (was 4)
   return {
     x: Math.max(0, minX - pad),
     y: Math.max(0, minY - pad),
