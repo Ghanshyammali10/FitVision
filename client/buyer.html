@@ -26,7 +26,7 @@
     .tryon-section { padding: 16px; flex: 1; }
     .ar-video-wrapper { position: relative; width: 100%; border-radius: var(--radius-lg); overflow: hidden; background: #000; aspect-ratio: 4/3; }
     .ar-video-wrapper video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-    .ar-video-wrapper canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; transform: scaleX(-1); }
+    .ar-video-wrapper canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; transform: scaleX(-1); }
     .ar-controls { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
     .current-garment-label { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
     .room-join-bar { display: flex; gap: 8px; padding: 0 16px 12px; }
@@ -35,6 +35,74 @@
     .no-garments-msg { text-align: center; padding: 30px 20px; color: var(--muted); font-size: 0.85rem; }
     .mannequin-canvas { width: 100%; max-width: 360px; border-radius: var(--radius-lg); border: 1px solid var(--border); display: block; margin: 0 auto; background: #0a0a0f; }
     .mannequin-actions { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
+
+    /* ── Size Recommendation Modal ── */
+    .size-modal-content { max-width: 520px; }
+    .size-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .size-modal-header h3 { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
+
+    /* Phase indicator */
+    .size-phase { display: flex; gap: 4px; margin-bottom: 20px; }
+    .size-phase-dot { flex: 1; height: 4px; border-radius: 2px; background: var(--border); transition: background 0.4s; }
+    .size-phase-dot.active { background: var(--accent); }
+    .size-phase-dot.done { background: var(--success); }
+
+    /* Calibration step */
+    .size-step { display: none; }
+    .size-step.active { display: block; }
+    .size-step-title { font-family: 'Syne', sans-serif; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); margin-bottom: 12px; }
+    .size-step p { color: var(--text-dim); font-size: 0.82rem; margin-bottom: 14px; line-height: 1.5; }
+
+    .height-input-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+    .height-input-row .input { max-width: 140px; text-align: center; font-size: 1.1rem; font-weight: 700; letter-spacing: 1px; }
+    .height-input-row span { color: var(--muted); font-size: 0.85rem; }
+
+    /* Calibration progress */
+    .cal-progress-wrap { margin: 16px 0; }
+    .cal-progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .cal-progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #a78bfa); width: 0%; transition: width 0.3s; border-radius: 3px; }
+    .cal-progress-text { font-size: 0.75rem; color: var(--muted); margin-top: 6px; text-align: center; }
+
+    /* Body guide */
+    .body-guide { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; background: rgba(124,111,247,0.06); border: 1px dashed rgba(124,111,247,0.2); border-radius: var(--radius-md); margin-bottom: 16px; }
+    .body-guide-icon { font-size: 2.8rem; opacity: 0.7; }
+    .body-guide-text { font-size: 0.78rem; color: var(--text-dim); line-height: 1.4; }
+
+    /* Measuring step — live bars */
+    .measure-bars { display: flex; flex-direction: column; gap: 14px; margin: 16px 0; }
+    .measure-bar-item { display: block; }
+    .measure-bar-label { display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 4px; }
+    .measure-bar-label .name { color: var(--text-dim); font-weight: 500; }
+    .measure-bar-label .value { color: var(--text); font-weight: 700; font-family: 'Syne', sans-serif; }
+    .measure-bar-track { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; position: relative; }
+    .measure-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+    .measure-bar-fill.shoulder { background: linear-gradient(90deg, #00e5ff, #00bcd4); }
+    .measure-bar-fill.chest { background: linear-gradient(90deg, #7c6ff7, #a78bfa); }
+    .measure-bar-fill.length { background: linear-gradient(90deg, #76ff03, #4caf50); }
+    .stability-indicator { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); margin-top: 10px; }
+    .stability-indicator .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); animation: pulse-badge 1s ease-in-out infinite; }
+    .stability-indicator.stable .pulse { background: var(--success); animation: none; }
+
+    /* Locked result */
+    .size-result { text-align: center; padding: 20px 0; }
+    .size-result-badge { display: inline-flex; align-items: center; justify-content: center; width: 80px; height: 80px; border-radius: 50%; font-family: 'Syne', sans-serif; font-weight: 800; font-size: 2rem; color: #fff; margin-bottom: 12px; animation: size-pop 0.5s cubic-bezier(0.34,1.56,0.64,1); }
+    .size-result-badge.excellent { background: linear-gradient(135deg, #34d399, #059669); box-shadow: 0 0 30px rgba(52,211,153,0.3); }
+    .size-result-badge.good { background: linear-gradient(135deg, #7c6ff7, #6366f1); box-shadow: 0 0 30px rgba(124,111,247,0.3); }
+    .size-result-badge.acceptable { background: linear-gradient(135deg, #fbbf24, #f59e0b); box-shadow: 0 0 30px rgba(251,191,36,0.3); }
+    @keyframes size-pop { 0% { transform: scale(0.3); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+    .size-result-confidence { font-size: 0.82rem; color: var(--text-dim); margin-bottom: 16px; }
+    .size-result-confidence strong { color: var(--text); }
+
+    /* Size chart table */
+    .size-chart-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 16px; }
+    .size-chart-table th { font-family: 'Syne', sans-serif; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px; color: var(--muted); border-bottom: 1px solid var(--border); text-align: center; font-size: 0.7rem; }
+    .size-chart-table td { padding: 8px 10px; text-align: center; border-bottom: 1px solid rgba(42,42,58,0.5); color: var(--text-dim); transition: all 0.3s; }
+    .size-chart-table tr.matched { background: rgba(124,111,247,0.1); }
+    .size-chart-table tr.matched td { color: var(--text); font-weight: 600; }
+    .size-chart-table tr.matched td:first-child { color: var(--accent); }
+
+    /* Actions */
+    .size-actions { display: flex; gap: 8px; justify-content: center; margin-top: 20px; }
   </style>
 </head>
 <body>
@@ -115,10 +183,12 @@
         <div class="ar-video-wrapper" id="arVideoWrapper">
           <video id="buyerVideo" autoplay playsinline muted></video>
           <canvas id="arCanvas"></canvas>
+          <canvas id="sizeOverlayCanvas"></canvas>
         </div>
         <div class="current-garment-label" id="currentGarmentLabel">No garment selected</div>
         <div class="ar-controls">
           <button class="control-btn active" id="arToggleBtn" title="Toggle AR">👕</button>
+          <button class="control-btn" id="sizeCheckBtn" title="Size Check" style="background:linear-gradient(135deg,#7c6ff7,#a78bfa);border-color:#7c6ff7;color:#fff;">📏</button>
           <button class="control-btn" id="screenshotBtn" title="Screenshot">📸</button>
           <button class="control-btn" id="mannequinBtn" title="Mannequin View">🧍</button>
           <button class="control-btn active" id="camToggleBtn" title="Toggle Camera">📷</button>
@@ -156,6 +226,91 @@
     </div>
   </div>
 
+  <!-- Size Recommendation Modal -->
+  <div class="modal-overlay" id="sizeModal">
+    <div class="modal-content size-modal-content">
+      <div class="size-modal-header">
+        <h3>📏 Smart Size Recommendation</h3>
+        <button class="btn btn-ghost btn-sm" id="closeSizeModal">✕</button>
+      </div>
+
+      <!-- Phase dots -->
+      <div class="size-phase">
+        <div class="size-phase-dot active" id="phase1Dot"></div>
+        <div class="size-phase-dot" id="phase2Dot"></div>
+        <div class="size-phase-dot" id="phase3Dot"></div>
+      </div>
+
+      <!-- Step 1: Calibration -->
+      <div class="size-step active" id="sizeStep1">
+        <div class="size-step-title">Step 1 — Calibrate</div>
+        <div class="body-guide">
+          <div class="body-guide-icon">🧍</div>
+          <div class="body-guide-text">Stand <strong>1.5–2m</strong> from camera.<br>Your <strong>full body</strong> (head to feet) must be visible.<br>Wear <strong>fitted clothing</strong> for best accuracy.</div>
+        </div>
+        <p>Enter your height so we can convert camera pixels to real-world measurements:</p>
+        <div class="height-input-row">
+          <input type="number" class="input" id="heightInput" placeholder="175" min="100" max="230" step="1">
+          <span>cm</span>
+          <button class="btn btn-primary btn-sm" id="startCalibrationBtn">Calibrate</button>
+        </div>
+        <div class="cal-progress-wrap" id="calProgressWrap" style="display:none;">
+          <div class="cal-progress-bar"><div class="cal-progress-fill" id="calProgressFill"></div></div>
+          <div class="cal-progress-text" id="calProgressText">Collecting frames... 0/10</div>
+        </div>
+      </div>
+
+      <!-- Step 2: Measuring -->
+      <div class="size-step" id="sizeStep2">
+        <div class="size-step-title">Step 2 — Measuring</div>
+        <p>Stand still, facing the camera. We're capturing your body measurements in real-time.</p>
+        <div class="measure-bars">
+          <div class="measure-bar-item">
+            <div class="measure-bar-label"><span class="name">Across Shoulder</span><span class="value" id="mShoulder">— cm</span></div>
+            <div class="measure-bar-track"><div class="measure-bar-fill shoulder" id="mShoulderBar" style="width:0%"></div></div>
+          </div>
+          <div class="measure-bar-item">
+            <div class="measure-bar-label"><span class="name">Chest (est.)</span><span class="value" id="mChest">— cm</span></div>
+            <div class="measure-bar-track"><div class="measure-bar-fill chest" id="mChestBar" style="width:0%"></div></div>
+          </div>
+          <div class="measure-bar-item">
+            <div class="measure-bar-label"><span class="name">Front Length</span><span class="value" id="mLength">— cm</span></div>
+            <div class="measure-bar-track"><div class="measure-bar-fill length" id="mLengthBar" style="width:0%"></div></div>
+          </div>
+        </div>
+        <div class="stability-indicator" id="stabilityIndicator">
+          <div class="pulse"></div>
+          <span id="stabilityText">Stabilising... stand still</span>
+        </div>
+      </div>
+
+      <!-- Step 3: Result -->
+      <div class="size-step" id="sizeStep3">
+        <div class="size-step-title">Your Recommended Size</div>
+        <div class="size-result">
+          <div class="size-result-badge" id="sizeResultBadge">—</div>
+          <div class="size-result-confidence" id="sizeResultConf">Confidence: <strong>—%</strong></div>
+        </div>
+
+        <!-- Measurements summary -->
+        <div class="measure-bars" id="lockedMeasureBars" style="opacity:0.85;"></div>
+
+        <!-- Size chart -->
+        <table class="size-chart-table">
+          <thead>
+            <tr><th>Size</th><th>Chest (cm)</th><th>Length (cm)</th><th>Shoulder (cm)</th></tr>
+          </thead>
+          <tbody id="sizeChartBody"></tbody>
+        </table>
+
+        <div class="size-actions">
+          <button class="btn btn-secondary btn-sm" id="resetSizeBtn">🔄 Reset</button>
+          <button class="btn btn-primary btn-sm" id="closeSizeResultBtn">✓ Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div class="toast-container" id="toastContainer"></div>
 
@@ -181,6 +336,13 @@
     let wishlist = [];
     let poseLoopId = null;
     let mannequinLoopId = null;
+
+    // ── Size Recommendation State ──
+    let cmPerPixel    = null;
+    let calibrating   = false;
+    let measuring     = false;
+    let lockedSize    = null;
+    let sizeLoopId    = null;
 
     // ── Init ──
     async function init() {
@@ -328,6 +490,7 @@
       });
 
       document.getElementById('arToggleBtn').addEventListener('click', toggleAR);
+      document.getElementById('sizeCheckBtn').addEventListener('click', openSizeModal);
       document.getElementById('screenshotBtn').addEventListener('click', takeScreenshot);
       document.getElementById('mannequinBtn').addEventListener('click', openMannequin);
       document.getElementById('closeModal').addEventListener('click', closeMannequin);
@@ -346,13 +509,19 @@
       document.getElementById('micBtn').addEventListener('click', toggleMic);
       document.getElementById('shareWishlistBtn').addEventListener('click', shareWishlist);
 
+      // Size modal buttons
+      document.getElementById('closeSizeModal').addEventListener('click', closeSizeModal);
+      document.getElementById('startCalibrationBtn').addEventListener('click', startCalibration);
+      document.getElementById('resetSizeBtn').addEventListener('click', resetSizeCheck);
+      document.getElementById('closeSizeResultBtn').addEventListener('click', closeSizeModal);
+
       document.getElementById('logoutBtn').addEventListener('click', () => {
         if (roomId) { FVSocket.leaveRoom(roomId); FVWebRTC.closeConnection(); }
         logoutUser();
       });
 
       document.addEventListener('visibilitychange', () => {
-        if (document.hidden) { stopPoseLoop(); }
+        if (document.hidden) { stopPoseLoop(); stopSizeLoop(); }
         else if (arEnabled && selectedGarmentImg) { startPoseLoop(); }
       });
     }
@@ -597,6 +766,294 @@
       const text = `🛍️ My FitVision Wishlist:\n${wishlist.map((w, i) => `${i + 1}. ${w.name}`).join('\n')}`;
       if (navigator.share) navigator.share({ title: 'My FitVision Wishlist', text }).catch(() => {});
       else navigator.clipboard.writeText(text).then(() => toast('Wishlist copied!', 'success'));
+    }
+
+    // ═══════════════════════════════════════════
+    // SIZE RECOMMENDATION — Full UI Wiring
+    // ═══════════════════════════════════════════
+
+    function openSizeModal() {
+      document.getElementById('sizeModal').classList.add('active');
+      // If already locked, show result step
+      if (lockedSize) {
+        showStep(3);
+      } else {
+        // Resume in-progress flow if user closed/reopened modal
+        if (calibrating) showStep(1);
+        else if (measuring) showStep(2);
+        else showStep(1);
+
+        if ((calibrating || measuring) && !sizeLoopId) {
+          startSizeLoop();
+        }
+      }
+    }
+
+    function closeSizeModal() {
+      document.getElementById('sizeModal').classList.remove('active');
+      stopSizeLoop();
+      clearSizeOverlay();
+    }
+
+    function showStep(n) {
+      document.querySelectorAll('.size-step').forEach(s => s.classList.remove('active'));
+      document.getElementById(`sizeStep${n}`).classList.add('active');
+
+      // Update phase dots
+      for (let i = 1; i <= 3; i++) {
+        const dot = document.getElementById(`phase${i}Dot`);
+        dot.classList.remove('active', 'done');
+        if (i < n) dot.classList.add('done');
+        else if (i === n) dot.classList.add('active');
+      }
+
+      // Keep the landmark overlay only on locked result
+      if (n !== 3) clearSizeOverlay();
+    }
+
+    function startCalibration() {
+      const h = parseFloat(document.getElementById('heightInput').value);
+      if (!h || h < 100 || h > 230) {
+        toast('Enter a valid height between 100–230 cm', 'error');
+        return;
+      }
+      FVAI.SizeRec.resetCalibration();
+      FVAI.SizeRec.resetMeasurements();
+      FVAI.SizeRec.clearLock();
+      calibrating = true;
+      measuring = false;
+      lockedSize = null;
+      cmPerPixel = null;
+
+      document.getElementById('calProgressWrap').style.display = 'block';
+      document.getElementById('calProgressFill').style.width = '0%';
+      document.getElementById('calProgressText').textContent = 'Collecting frames... 0/10';
+
+      startSizeLoop();
+    }
+
+    function startSizeLoop() {
+      stopSizeLoop();
+      const video = document.getElementById('buyerVideo');
+
+      async function loop() {
+        if (!document.getElementById('sizeModal').classList.contains('active')) return;
+        const keypoints = await FVAI.getPose(video);
+        if (keypoints) onSizePoseResult(keypoints);
+        sizeLoopId = requestAnimationFrame(loop);
+      }
+      loop();
+    }
+
+    function stopSizeLoop() {
+      if (sizeLoopId) { cancelAnimationFrame(sizeLoopId); sizeLoopId = null; }
+    }
+
+    function onSizePoseResult(keypoints) {
+      // ── CALIBRATION PHASE ──
+      if (calibrating) {
+        const h = parseFloat(document.getElementById('heightInput').value);
+        if (!h || h < 100 || h > 230) return;
+        const cal = FVAI.SizeRec.feedCalibrationFrame(keypoints, h);
+        const collected = cal.collected || 0;
+        const pct = Math.min(100, (collected / 10) * 100);
+        document.getElementById('calProgressFill').style.width = pct + '%';
+        document.getElementById('calProgressText').textContent =
+          `Collecting frames... ${collected}/10`;
+
+        if (cal.ready) {
+          cmPerPixel = cal.cmPerPixel;
+          calibrating = false;
+          measuring = true;
+          document.getElementById('calProgressFill').style.width = '100%';
+          document.getElementById('calProgressText').textContent = '✓ Calibrated!';
+          toast('Calibration complete! Measuring...', 'success');
+          setTimeout(() => showStep(2), 500);
+        }
+        return;
+      }
+
+      // ── MEASUREMENT + LOCK PHASE ──
+      if (measuring && cmPerPixel) {
+        const m = FVAI.SizeRec.feedMeasurementFrame(keypoints, cmPerPixel);
+        if (m) updateLiveMeasurements(m);
+
+        const locked = FVAI.SizeRec.tryLock(m);
+        if (locked && !lockedSize) {
+          lockedSize = locked;
+          measuring = false;
+          stopSizeLoop();
+          drawLandmarkOverlay(keypoints);
+          showLockedResult(locked);
+        }
+      }
+    }
+
+    function updateLiveMeasurements(m) {
+      // Value labels
+      document.getElementById('mShoulder').textContent = m.shoulderCm.toFixed(1) + ' cm';
+      document.getElementById('mChest').textContent = m.chestCm.toFixed(1) + ' cm';
+      document.getElementById('mLength').textContent = m.frontLengthCm.toFixed(1) + ' cm';
+
+      // Progress bars (relative to XXL max)
+      document.getElementById('mShoulderBar').style.width = Math.min(100, (m.shoulderCm / 50) * 100) + '%';
+      document.getElementById('mChestBar').style.width = Math.min(100, (m.chestCm / 115) * 100) + '%';
+      document.getElementById('mLengthBar').style.width = Math.min(100, (m.frontLengthCm / 80) * 100) + '%';
+
+      // Stability indicator
+      const indicator = document.getElementById('stabilityIndicator');
+      const text = document.getElementById('stabilityText');
+      if (m.stdDevShoulder < 2.0 && m.frames >= 15) {
+        indicator.classList.add('stable');
+        text.textContent = 'Stable — locking soon...';
+      } else {
+        indicator.classList.remove('stable');
+        text.textContent = `Stabilising... (σ=${m.stdDevShoulder.toFixed(1)}cm, ${m.frames}/30 frames)`;
+      }
+    }
+
+    function showLockedResult(result) {
+      showStep(3);
+
+      // Size badge
+      const badge = document.getElementById('sizeResultBadge');
+      badge.textContent = result.size;
+      badge.className = 'size-result-badge';
+      if (result.confidence > 85) badge.classList.add('excellent');
+      else if (result.confidence > 70) badge.classList.add('good');
+      else badge.classList.add('acceptable');
+
+      // Confidence text
+      const confLabel = result.confidence > 85 ? 'Excellent match' :
+                        result.confidence > 70 ? 'Good match' : 'Acceptable match';
+      document.getElementById('sizeResultConf').innerHTML =
+        `Confidence: <strong>${result.confidence.toFixed(0)}%</strong> — ${confLabel}`;
+
+      // Locked measurement summary
+      const m = result.measurements;
+      document.getElementById('lockedMeasureBars').innerHTML = `
+        <div class="measure-bar-item">
+          <div class="measure-bar-label"><span class="name">Across Shoulder</span><span class="value">${m.shoulderCm.toFixed(1)} cm</span></div>
+          <div class="measure-bar-track"><div class="measure-bar-fill shoulder" style="width:${Math.min(100, (m.shoulderCm / 50) * 100)}%"></div></div>
+        </div>
+        <div class="measure-bar-item">
+          <div class="measure-bar-label"><span class="name">Chest (estimated)</span><span class="value">${m.chestCm.toFixed(1)} cm</span></div>
+          <div class="measure-bar-track"><div class="measure-bar-fill chest" style="width:${Math.min(100, (m.chestCm / 115) * 100)}%"></div></div>
+        </div>
+        <div class="measure-bar-item">
+          <div class="measure-bar-label"><span class="name">Front Length</span><span class="value">${m.frontLengthCm.toFixed(1)} cm</span></div>
+          <div class="measure-bar-track"><div class="measure-bar-fill length" style="width:${Math.min(100, (m.frontLengthCm / 80) * 100)}%"></div></div>
+        </div>
+      `;
+
+      // Size chart table with matched row
+      const chart = FVAI.SizeRec.getSizeChart();
+      document.getElementById('sizeChartBody').innerHTML = chart.map(row =>
+        `<tr class="${row.size === result.size ? 'matched' : ''}">
+          <td>${row.size}</td>
+          <td>${row.chest}</td>
+          <td>${row.frontLength}</td>
+          <td>${row.shoulder}</td>
+        </tr>`
+      ).join('');
+
+      toast(`Recommended size: ${result.size} (${result.confidence.toFixed(0)}% confidence)`, 'success');
+    }
+
+    function drawLandmarkOverlay(kp) {
+      if (!kp || !kp[11] || !kp[12] || !kp[23] || !kp[24]) return;
+      const cvs = document.getElementById('sizeOverlayCanvas');
+      const video = document.getElementById('buyerVideo');
+      cvs.width = video.videoWidth || 640;
+      cvs.height = video.videoHeight || 480;
+      const ctx = cvs.getContext('2d');
+      const W = cvs.width, H = cvs.height;
+
+      // Shoulder line (cyan)
+      ctx.strokeStyle = '#00e5ff';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(kp[11].x, kp[11].y);
+      ctx.lineTo(kp[12].x, kp[12].y);
+      ctx.stroke();
+
+      // Shoulder endpoint dots
+      [kp[11], kp[12]].forEach(p => {
+        ctx.fillStyle = '#00e5ff';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Torso lines (green)
+      ctx.strokeStyle = '#76ff03';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(kp[11].x, kp[11].y);
+      ctx.lineTo(kp[23].x, kp[23].y);
+      ctx.moveTo(kp[12].x, kp[12].y);
+      ctx.lineTo(kp[24].x, kp[24].y);
+      ctx.stroke();
+
+      // Hip line (amber)
+      ctx.strokeStyle = '#ffb300';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(kp[23].x, kp[23].y);
+      ctx.lineTo(kp[24].x, kp[24].y);
+      ctx.stroke();
+
+      // Hip endpoint dots
+      [kp[23], kp[24]].forEach(p => {
+        ctx.fillStyle = '#ffb300';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Measurement labels
+      ctx.font = 'bold 12px "DM Sans", sans-serif';
+      ctx.textAlign = 'center';
+      if (lockedSize && lockedSize.measurements) {
+        const m = lockedSize.measurements;
+        // Shoulder label
+        const smx = (kp[11].x + kp[12].x) / 2;
+        const smy = (kp[11].y + kp[12].y) / 2 - 12;
+        ctx.fillStyle = '#00e5ff';
+        ctx.fillText(`${m.shoulderCm.toFixed(1)}cm`, smx, smy);
+
+        // Torso label
+        const tmx = Math.max(kp[11].x, kp[12].x) + 20;
+        const tmy = ((kp[11].y + kp[12].y) / 2 + (kp[23].y + kp[24].y) / 2) / 2;
+        ctx.fillStyle = '#76ff03';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${m.frontLengthCm.toFixed(1)}cm`, tmx, tmy);
+      }
+    }
+
+    function clearSizeOverlay() {
+      const cvs = document.getElementById('sizeOverlayCanvas');
+      const ctx = cvs.getContext('2d');
+      ctx.clearRect(0, 0, cvs.width, cvs.height);
+    }
+
+    function resetSizeCheck() {
+      FVAI.SizeRec.resetMeasurements();
+      FVAI.SizeRec.clearLock();
+      FVAI.SizeRec.resetCalibration();
+      lockedSize = null;
+      cmPerPixel = null;
+      calibrating = false;
+      measuring = false;
+
+      // Clear size overlay
+      clearSizeOverlay();
+
+      // Reset UI to step 1
+      document.getElementById('calProgressWrap').style.display = 'none';
+      showStep(1);
+      toast('Size check reset. Ready for new measurement.', '');
     }
 
     // ── Toast ──
