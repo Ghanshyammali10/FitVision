@@ -299,7 +299,6 @@
 
       FVSocket.onGarmentCaptured((data) => {
         addGarment(data);
-        toast('New garment captured! ✨', 'success');
       });
 
       FVSocket.onReplaced(({ reason }) => {
@@ -358,31 +357,47 @@
       });
     }
 
-    // ── Garments (Front/Back Support) ──
+    // ── Garments (Front/Back Auto-Pair) ──
     function addGarment(data) {
       const { garmentDataUrl, garmentName, timestamp, side } = data;
       const garmentSide = side || 'front';
 
-      // Try to find an existing garment with same base name to pair front+back
-      // Base name: strip " (front)" or " (back)" suffix
-      const baseName = garmentName.replace(/ \((front|back)\)$/i, '');
+      // Base name: strip " (front)" or " (back)" suffix → "Garment 1"
+      const baseName = garmentName.replace(/ \((front|back)\)$/i, '').trim();
       let existing = garments.find(g => g.baseName === baseName);
 
       if (existing) {
-        // Update the existing garment with the new side
+        // ── UPDATE existing garment with new side ──
         if (garmentSide === 'front') existing.frontDataUrl = garmentDataUrl;
         else existing.backDataUrl = garmentDataUrl;
-        toast(`${garmentSide} side added to ${baseName}!`, 'success');
 
-        // If this garment is currently selected, reload the new side
+        // Update the existing card's badge + thumbnail
+        const card = document.getElementById('garment-card-' + existing.id);
+        if (card) {
+          const hasBoth = existing.frontDataUrl && existing.backDataUrl;
+          const badge = card.querySelector('.side-badge');
+          if (badge) {
+            badge.textContent = hasBoth ? 'front + back' : garmentSide;
+            badge.style.background = hasBoth ? '#7c6ff7' : (garmentSide === 'front' ? '#4CAF50' : '#FF9800');
+          }
+          // Update thumbnail to show the newly captured side
+          const thumb = card.querySelector('img');
+          if (thumb) thumb.src = garmentDataUrl;
+        }
+
+        // If this garment is currently selected, live-reload the new side
         if (selectedGarment && selectedGarment.baseName === baseName) {
           loadGarmentSide(garmentDataUrl, garmentSide);
         }
+
+        toast(`${garmentSide} side added to ${baseName}! ${existing.frontDataUrl && existing.backDataUrl ? '✅ Both sides ready' : ''}`, 'success');
         return;
       }
 
-      // New garment
+      // ── NEW garment ──
+      const garmentId = 'g' + Date.now();
       const garment = {
+        id: garmentId,
         baseName,
         name: garmentName,
         frontDataUrl: garmentSide === 'front' ? garmentDataUrl : null,
@@ -397,24 +412,30 @@
       const grid = document.getElementById('garmentGrid');
       const card = document.createElement('div');
       card.className = 'garment-grid-card';
+      card.id = 'garment-card-' + garmentId;
+      card.style.position = 'relative';
       card.innerHTML = `
-        <img src="${garmentDataUrl}" alt="${garmentName}">
+        <img src="${garmentDataUrl}" alt="${baseName}">
         <div style="position:absolute;top:4px;right:4px;">
-          <span style="background:${garmentSide === 'front' ? '#4CAF50' : '#FF9800'};color:#fff;padding:1px 6px;border-radius:8px;font-size:0.6rem;">${garmentSide}</span>
+          <span class="side-badge" style="background:${garmentSide === 'front' ? '#4CAF50' : '#FF9800'};color:#fff;padding:1px 6px;border-radius:8px;font-size:0.6rem;">${garmentSide}</span>
+        </div>
+        <div style="position:absolute;bottom:28px;left:0;right:0;text-align:center;">
+          <span style="color:#fff;font-size:0.65rem;text-shadow:0 1px 3px #000;">${baseName}</span>
         </div>
         <div class="garment-actions">
-          <button class="btn btn-primary btn-sm tryon-btn">Try On</button>
+          <button class="btn btn-primary btn-sm tryon-btn">👕 Try On</button>
           <button class="btn btn-ghost btn-sm wishlist-btn">💝</button>
         </div>
       `;
 
       card.querySelector('.tryon-btn').addEventListener('click', () => selectGarment(garment));
       card.querySelector('.wishlist-btn').addEventListener('click', () => {
-        addToWishlist(garmentDataUrl, garmentName);
-        toast(`${garmentName} added to wishlist!`, 'success');
+        addToWishlist(garmentDataUrl, baseName);
+        toast(`${baseName} added to wishlist!`, 'success');
       });
 
       grid.appendChild(card);
+      toast(`${baseName} (${garmentSide}) received!`, 'success');
     }
 
     function loadGarmentSide(dataUrl, side) {

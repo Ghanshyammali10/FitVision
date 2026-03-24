@@ -312,7 +312,12 @@
         toast('Cropping garment...', '');
         const croppedDataUrl = await FVAI.autoCropGarment(rawDataUrl, video);
 
-        garmentCount++;
+        // Only increment counter for FRONT captures (starts a new garment).
+        // BACK captures reuse the current counter so buyer can pair them.
+        // Name format: "Garment 1 (front)" and "Garment 1 (back)" → baseName matches "Garment 1"
+        if (side === 'front') {
+          garmentCount++;
+        }
         const name = `Garment ${garmentCount} (${side})`;
 
         document.getElementById('noCapMsg')?.remove();
@@ -327,7 +332,7 @@
           FVSocket.sendGarmentCaptured(roomId, croppedDataUrl, name, side);
         }
 
-        toast(`${side.charAt(0).toUpperCase() + side.slice(1)} captured!`, 'success');
+        toast(`${side.charAt(0).toUpperCase() + side.slice(1)} side of Garment ${garmentCount} captured!`, 'success');
       } catch (e) {
         console.error('Capture error:', e);
         toast('Capture failed', 'error');
