@@ -1,0 +1,426 @@
+You are an expert full-stack developer. Build a complete web application called "FitVision" — a live seller-to-buyer video shopping platform with AR clothing try-on. The app must work across devices: seller on mobile, buyer on laptop, using the same website but different account types.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PROJECT STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+fitvision/
+├── server/
+│   ├── server.js          ← Node.js signaling server
+│   └── package.json
+├── client/
+│   ├── index.html         ← Login / landing page
+│   ├── seller.html        ← Seller dashboard (mobile-optimized)
+│   ├── buyer.html         ← Buyer dashboard (desktop-optimized)
+│   ├── js/
+│   │   ├── auth.js        ← Firebase auth logic
+│   │   ├── webrtc.js      ← WebRTC peer connection logic
+│   │   ├── ai.js          ← TensorFlow.js AI features
+│   │   └── socket.js      ← Socket.io client
+│   └── css/
+│       └── style.css      ← Shared styles
+└── firebase.json          ← Firebase config
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 1 — SIGNALING SERVER (server/server.js)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Build a Node.js + Express + Socket.io signaling server.
+
+Dependencies: express, socket.io, cors, dotenv
+
+The server must handle these Socket.io events:
+
+CLIENT → SERVER:
+- "join-room" ({ roomId, role })        → join a socket room, broadcast "user-joined" to others in the room
+- "offer"   ({ roomId, offer })         → relay WebRTC offer to the other peer in the room
+- "answer"  ({ roomId, answer })        → relay WebRTC answer to the other peer in the room
+- "ice-candidate" ({ roomId, candidate }) → relay ICE candidate to the other peer
+- "leave-room" ({ roomId })             → notify other peer, clean up
+
+SERVER → CLIENT:
+- "user-joined"    ({ role })           → tells existing peer that someone joined
+- "offer"          ({ offer })          → forwarded offer from other peer
+- "answer"         ({ answer })         → forwarded answer from other peer
+- "ice-candidate"  ({ candidate })      → forwarded ICE candidate
+- "user-left"      ()                   → other peer disconnected
+- "room-full"      ()                   → room already has 2 people
+
+Rooms object in memory: { roomId: [socketId1, socketId2] }
+Max 2 people per room.
+Generate room IDs as 6-character alphanumeric strings.
+Add a "create-room" event that generates and returns a new room ID.
+
+Server listens on PORT from .env, default 3001.
+Add CORS for all origins in development.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 2 — FIREBASE SETUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use Firebase v9 modular SDK.
+
+Auth:
+- Email + password authentication
+- User has a "role" field: either "seller" or "buyer"
+- Store role in Firestore: users/{uid} → { role, displayName, createdAt }
+- After login, redirect based on role:
+  - seller → /seller.html
+  - buyer  → /buyer.html
+- Protect routes: if not logged in, redirect to index.html
+- If role mismatch (seller tries to open buyer.html), redirect to correct page
+
+Firestore collections:
+- users/{uid}         → { role, displayName, email, createdAt }
+- rooms/{roomId}      → { sellerId, sellerName, createdAt, status: "waiting"|"active"|"ended" }
+- garments/{id}       → { sellerId, roomId, imageDataUrl, name, capturedAt, bgRemoved: bool }
+
+Firebase Storage:
+- Store captured garment images at: garments/{sellerId}/{timestamp}.png
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 3 — LOGIN PAGE (client/index.html)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Design a clean, dark-themed login/register page.
+
+UI elements:
+- App name "FitVision" with a subtitle "Live shopping, try before you buy"
+- Toggle between Login and Register
+- Register form fields: Name, Email, Password, Role selector (Seller / Buyer as two big toggle cards)
+  - Seller card: icon of a shop, label "I'm a Seller — I show products live"
+  - Buyer card: icon of a person, label "I'm a Buyer — I want to try on clothes"
+- Login form fields: Email, Password
+- Show error messages inline (wrong password, email exists, etc.)
+- Show loading spinner on submit
+
+After successful register/login → redirect to seller.html or buyer.html based on role.
+
+Style: dark background #0a0a0f, accent purple #7c6ff7, font Syne for headings + DM Sans for body.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 4 — SELLER PAGE (client/seller.html)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Mobile-optimized layout (max-width 480px centered, works on phone).
+
+SECTIONS:
+
+[A] Header
+- App logo, seller's display name, logout button
+- Connection status dot (green = buyer connected, gray = waiting)
+
+[B] Room Management
+- "Create Room" button → calls server "create-room" → gets roomId back
+- Display room code in big text: e.g. "SHOP-4821"
+- "Share Link" button → copies URL: yourdomain.com/buyer.html?room=SHOP-4821 to clipboard
+- Room status: "Waiting for buyer..." / "Buyer connected!" / "In session"
+
+[C] My Camera (seller's own video)
+- Full-width video element showing seller's rear camera (facingMode: "environment") on mobile
+- A toggle to switch between front and rear camera
+- Mic mute button
+- "LIVE" badge when buyer is connected
+
+[D] Buyer's Video (small PiP — Picture in Picture)
+- Small 120x160px video in bottom-right corner showing the buyer's face
+- Only visible when buyer is connected
+
+[E] Garment Capture Panel
+- Big "📸 Capture Garment" button (always visible, easy to tap on mobile)
+- When tapped:
+  1. Freeze current camera frame onto an offscreen canvas
+  2. Run body segmentation (MediaPipe Selfie Segmentation via TF.js) to remove background
+  3. Show a preview of the cutout garment with transparent background
+  4. Confirm / Retake buttons
+  5. On confirm: save to Firestore + Firebase Storage, emit "garment-captured" socket event to buyer
+- Captured garments strip: horizontal scrollable row of thumbnails
+- Each thumbnail: tap to re-send to buyer, long press to delete
+
+[F] AI Controls toggle panel (collapsed by default, tap to expand)
+- Auto-detect clothing toggle (runs every 1 second, shows scan animation)
+- Pose skeleton overlay toggle
+- Background removal quality: Fast / High (switches TF.js model)
+
+[G] Session Stats bar (bottom)
+- Garments shown: N
+- Session duration: 00:00
+- Buyer interest: N try-ons
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 5 — BUYER PAGE (client/buyer.html)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Desktop-optimized layout (two-column grid).
+
+SECTIONS:
+
+[A] Header
+- App logo, buyer's display name, logout button
+- Room join bar: input for room code + "Join Room" button
+- Or auto-join if URL has ?room=XXXX query param
+
+[B] Left column — Seller's live video
+- Large video showing the seller's stream (received via WebRTC)
+- "LIVE" badge + seller name
+- When seller captures a garment, show a toast: "New garment captured! ✨"
+- Below video: scrollable row of all garments the seller has captured this session
+  - Each garment card: thumbnail + "Try On" button + "Save to Wishlist" button
+
+[C] Right column — Buyer's camera + AR try-on
+- Buyer's own camera (front-facing, facingMode: "user")
+- On top of buyer's video, draw the AR overlay canvas (same dimensions, z-index above video)
+- When a garment is selected for try-on:
+  1. Run MoveNet pose detection on buyer's video stream (every 100ms)
+  2. Detect left shoulder (keypoint 5), right shoulder (keypoint 6), left hip (11), right hip (12)
+  3. Calculate garment placement:
+     - x = leftShoulder.x - (shoulderWidth * 0.15)
+     - y = min(leftShoulder.y, rightShoulder.y) - (shoulderWidth * 0.08)
+     - width = shoulderWidth * 1.4
+     - height = (hipY - shoulderY) * 1.2 (or width * 1.3 if hips not detected)
+  4. Draw garment image (with transparent bg) onto AR canvas at those coordinates
+  5. Use ctx.globalAlpha = 0.85 for natural blending
+- AR try-on toggle button: on/off
+- "Screenshot" button: capture canvas + video composite as PNG download
+
+[D] Mannequin Face Swap modal (opens as full overlay)
+- Draw a stylized human body silhouette (SVG or canvas)
+- Run MediaPipe Face Detector on buyer's video
+- Crop the detected face bounding box from buyer's video frame
+- Draw cropped face onto the mannequin head area (clip to circle)
+- Overlay the selected garment on the mannequin torso
+- This gives the buyer a "preview" of how the outfit looks on a model with their face
+- Close button, Screenshot button, Save to Wishlist button
+
+[E] Wishlist panel (right sidebar or collapsible)
+- Grid of saved garment+tryon screenshots
+- Each item: thumbnail, garment name, "Remove" button
+- "Share Wishlist" button → generates a shareable link
+
+[F] Bottom controls bar
+- Mic toggle, camera toggle
+- AR overlay toggle
+- Mannequin view button
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 6 — WEBRTC CONNECTION (client/js/webrtc.js)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use the native RTCPeerConnection API. No third-party WebRTC libraries.
+
+ICE servers config:
+{
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" }
+  ]
+}
+
+Connection flow:
+1. Both seller and buyer join the same socket room
+2. When buyer joins, server emits "user-joined" to seller
+3. Seller creates RTCPeerConnection, adds local stream tracks
+4. Seller creates offer → setLocalDescription → emits "offer" to server
+5. Server relays offer to buyer
+6. Buyer receives offer → setRemoteDescription → creates answer → setLocalDescription → emits "answer"
+7. Server relays answer to seller
+8. Seller receives answer → setRemoteDescription
+9. Both sides exchange ICE candidates via "ice-candidate" events
+10. ontrack event fires → set remote video element's srcObject
+
+Export these functions from webrtc.js:
+- initWebRTC(localStream, onRemoteStream)
+- createOffer(roomId)
+- handleOffer(offer, roomId)
+- handleAnswer(answer)
+- handleIceCandidate(candidate)
+- closeConnection()
+
+Handle disconnection: on "user-left" socket event, reset peer connection, clear remote video.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 7 — AI FEATURES (client/js/ai.js)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Load models from CDN (jsDelivr). All models run in-browser via TensorFlow.js.
+
+Import via script tags:
+- https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js
+- https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.1/dist/body-segmentation.js
+- https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.js
+- https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2/dist/face-detection.js
+
+FUNCTION 1 — removeBackground(videoElement) → returns ImageData
+  - Use bodySegmentation.createSegmenter with MediaPipeSelfieSegmentation
+  - runtime: "tfjs", modelType: "general"
+  - Draw video frame to offscreen canvas
+  - Run segmentPeople()
+  - toBinaryMask() with threshold 0.5
+  - Loop through pixels: if mask alpha < 128, set pixel alpha = 0
+  - Return resulting canvas as PNG dataURL
+
+FUNCTION 2 — getPose(videoElement) → returns keypoints array
+  - Use poseDetection.createDetector with MoveNet SINGLEPOSE_LIGHTNING
+  - Call estimatePoses(videoElement) every 100ms
+  - Return poses[0].keypoints (array of {name, x, y, score})
+  - Cache last valid pose; if no pose detected, return cached
+
+FUNCTION 3 — getFace(videoElement) → returns { box: {xMin, yMin, width, height} }
+  - Use faceDetection.createDetector with MediaPipeFaceDetector
+  - runtime: "tfjs", maxFaces: 1
+  - Call estimateFaces(videoElement)
+  - Return faces[0] or null
+
+FUNCTION 4 — drawAROverlay(ctx, canvasW, canvasH, garmentImg, poseKeypoints)
+  - Extract keypoints: leftShoulder [5], rightShoulder [6], leftHip [11], rightHip [12]
+  - Validate: both shoulders must have score > 0.25
+  - Calculate placement (see Part 5 section C above)
+  - ctx.globalAlpha = 0.85
+  - ctx.drawImage(garmentImg, x, y, width, height)
+  - ctx.globalAlpha = 1.0
+
+FUNCTION 5 — drawMannequinFaceSwap(canvas, garmentImg, buyerVideoElement, faceData)
+  - Draw body silhouette on canvas using SVG-style canvas drawing:
+    - Head: circle at (cx, 70)
+    - Neck: small rect
+    - Torso: trapezoid (wider at shoulders, narrower at hips)
+    - Arms: parallelogram shapes
+    - Legs: two rects
+    - Color: #2a2a3a (dark neutral)
+  - If faceData exists:
+    - Create offscreen canvas, draw buyerVideoElement frame
+    - Crop box region from frame
+    - ctx.save() → ctx.beginPath() → arc clip at head position → ctx.clip()
+    - Draw cropped face into head circle
+    - ctx.restore()
+  - Overlay garmentImg on torso area (x = cx-70, y = headBottom+neckH, w = 140, h = 170)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 8 — SOCKET CLIENT (client/js/socket.js)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Connect to signaling server using Socket.io client CDN:
+https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js
+
+Export socket instance and these helpers:
+- connectSocket(serverUrl)
+- createRoom()                       → Promise<roomId>
+- joinRoom(roomId, role)
+- sendOffer(roomId, offer)
+- sendAnswer(roomId, answer)
+- sendIceCandidate(roomId, candidate)
+- leaveRoom(roomId)
+- onUserJoined(callback)
+- onOffer(callback)
+- onAnswer(callback)
+- onIceCandidate(callback)
+- onUserLeft(callback)
+- onRoomFull(callback)
+
+Also emit a custom event "garment-captured" with { roomId, garmentDataUrl, garmentName }
+Buyer listens for "garment-captured" → adds to captured garments panel + shows toast notification.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 9 — STYLING (client/css/style.css)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Design language: dark, premium, techy. Like a high-end fashion app crossed with a video call tool.
+
+CSS Variables:
+--bg: #0a0a0f
+--surface: #12121a
+--card: #1a1a26
+--border: rgba(255,255,255,0.08)
+--accent: #7c6ff7       (purple)
+--accent2: #f7896f      (coral/orange for seller)
+--accent3: #4ade80      (green for buyer/connected)
+--text: #f0eef8
+--muted: rgba(240,238,248,0.45)
+
+Fonts (load from Google Fonts):
+- Syne (400, 700, 800) → headings, logo, big labels
+- DM Sans (300, 400, 500) → body text, buttons, inputs
+
+Common components to define:
+.btn-primary     → filled accent bg, rounded-full, hover scale(1.03)
+.btn-secondary   → transparent bg, border accent, hover fill
+.btn-danger      → red bg (#e74c3c)
+.card            → surface bg, border, border-radius 16px
+.badge           → small pill, various semantic colors
+.video-container → relative position, aspect-ratio 4/3, black bg, overflow hidden
+.status-dot      → 8px circle, green pulse animation when .live class added
+.toast           → fixed bottom center, slide-up animation, auto-dismiss 3s
+.spinner         → rotating border animation
+
+Seller page: single column, max-width 480px, mobile-first
+Buyer page: CSS grid, 2 columns on desktop, collapses to 1 column on mobile (<768px)
+
+Transitions on all interactive elements: 0.2s ease
+No scrollbars visible (scrollbar-width: none)
+Custom scrollbar via ::-webkit-scrollbar for the garments strip (thin, styled)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 10 — DEPLOYMENT INSTRUCTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Signaling server → Railway.app
+1. Push server/ folder to GitHub
+2. Connect to Railway, deploy as Node.js
+3. Set environment variable PORT=3001
+4. Railway gives you a URL like: https://fitvision-server.railway.app
+
+Frontend → Vercel or Netlify
+1. Push client/ folder
+2. Set environment variable in js/socket.js:
+   const SERVER_URL = "https://fitvision-server.railway.app"
+3. Set Firebase config variables (apiKey, projectId, etc.) from Firebase Console
+
+HTTPS is required for getUserMedia (camera) on mobile.
+Both Railway and Vercel/Netlify provide HTTPS by default — no extra config needed.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT IMPLEMENTATION NOTES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. All TF.js model loading must show a loading overlay with progress messages.
+   Do not hide the loading screen until ALL three models are loaded.
+
+2. Camera permissions: request camera+mic only after user clicks a button, 
+   not on page load. Mobile browsers block autoplay of getUserMedia.
+
+3. On seller mobile: default to facingMode "environment" (rear camera).
+   On buyer desktop: default to facingMode "user" (front/selfie camera).
+
+4. Garment images must be sent as compressed JPEG data URLs (quality 0.8) 
+   to avoid large payloads over socket. Use canvas.toDataURL("image/jpeg", 0.8).
+
+5. The AR overlay canvas must be positioned absolute on top of the video element,
+   with pointer-events: none so the user can still interact with controls below.
+
+6. The pose detection loop (requestAnimationFrame) must be stopped when:
+   - The buyer switches away from the AR try-on tab
+   - The camera is turned off
+   - The page is hidden (use document.visibilitychange event)
+   This prevents memory leaks and battery drain on mobile.
+
+7. For the face swap, always check if faceData is fresh (< 2 seconds old).
+   Use a timestamp on each faceData update. If stale, show placeholder face instead.
+
+8. WebRTC renegotiation: if the seller switches camera (front/rear), 
+   call sender.replaceTrack() instead of creating a new peer connection.
+
+9. Error handling for all socket events — if "room-full" is received, 
+   show a clear error: "This room is full. Ask the seller for a new link."
+
+10. Add a "demo mode" fallback: if getUserMedia fails (permission denied or 
+    no camera), load sample video files and simulate the full flow so the 
+    app can still be demoed without a real camera.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DELIVERABLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Generate ALL files completely. Do not use placeholders or "// TODO" comments.
+Every function must be fully implemented.
+Every UI element described must be present and functional.
+The app must work end-to-end: seller on mobile + buyer on laptop, same site, different account types, live video call with AR try-on.

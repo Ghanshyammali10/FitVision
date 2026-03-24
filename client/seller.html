@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>FitVision — Seller Dashboard</title>
+  <meta name="description" content="FitVision Seller Dashboard: Stream live, capture garments, and connect with buyers.">
+  <link rel="stylesheet" href="css/style.css">
+  <!-- Socket.io -->
+  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js"></script>
+  <!-- TensorFlow.js & Models -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.1/dist/body-segmentation.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2/dist/face-detection.js"></script>
+  <style>
+    .seller-page { display: flex; flex-direction: column; min-height: 100vh; max-width: 480px; margin: 0 auto; position: relative; }
+    .seller-main { flex: 1; overflow-y: auto; padding-bottom: 80px; }
+
+    .room-section { padding: 16px; text-align: center; }
+    .room-status-text { font-size: 0.85rem; color: var(--muted); margin-top: 8px; }
+    .room-status-text.connected { color: var(--accent3); }
+    .room-actions { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
+
+    .camera-section { padding: 0 16px 16px; }
+    .camera-controls { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+
+    .capture-section { padding: 16px; }
+    .capture-btn { width: 100%; padding: 18px; font-size: 1rem; font-weight: 600; }
+
+    .ai-panel { margin: 0 16px; background: var(--surface); border-radius: var(--radius-lg); border: 1px solid var(--border); overflow: hidden; }
+    .ai-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; cursor: pointer; }
+    .ai-panel-header span:last-child { transition: transform 0.3s; }
+    .ai-panel-body { padding: 0 16px; max-height: 0; overflow: hidden; transition: max-height 0.4s ease, padding 0.3s ease; }
+    .ai-panel-body.open { max-height: 200px; padding: 0 16px 16px; }
+    .ai-option { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .ai-option:last-child { border-bottom: none; }
+    .ai-option-label { font-size: 0.85rem; color: var(--text-secondary); }
+
+    .garment-strip-section { padding: 0 16px; margin-top: 12px; }
+    .garment-strip-header { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .no-garments { text-align: center; padding: 20px; color: var(--muted); font-size: 0.85rem; }
+
+    .seller-stats { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; z-index: 200; }
+
+    .pip-container { position: fixed; bottom: 100px; right: 20px; width: 120px; height: 160px; border-radius: var(--radius); overflow: hidden; border: 2px solid var(--accent); box-shadow: var(--shadow-lg); z-index: 100; display: none; }
+    .pip-container.visible { display: block; }
+    .pip-container video { width: 100%; height: 100%; object-fit: cover; }
+  </style>
+</head>
+<body>
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="logo logo-lg">FitVision</div>
+    <div class="spinner spinner-lg"></div>
+    <div class="loading-text" id="loadingText">Initializing AI models...</div>
+    <div class="loading-progress">
+      <div class="loading-progress-bar" id="progressBar" style="width: 0%"></div>
+    </div>
+  </div>
+
+  <div class="seller-page">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <span class="logo">FitVision</span>
+        <span class="status-dot" id="connectionDot"></span>
+      </div>
+      <div class="header-right">
+        <span class="user-info" id="sellerName">Seller</span>
+        <button class="btn btn-ghost btn-sm" id="logoutBtn">Logout</button>
+      </div>
+    </header>
+
+    <div class="seller-main">
+      <!-- Room Management -->
+      <div class="room-section">
+        <div id="roomCreate">
+          <button class="btn btn-primary btn-lg" id="createRoomBtn" style="width:100%">
+            🎥 Create Live Room
+          </button>
+        </div>
+        <div id="roomInfo" class="hidden">
+          <div class="room-code" id="roomCode">------</div>
+          <p class="room-status-text" id="roomStatus">Waiting for buyer...</p>
+          <div class="room-actions">
+            <button class="btn btn-secondary btn-sm" id="shareBtn">📋 Copy Link</button>
+            <button class="btn btn-danger btn-sm" id="endRoomBtn">End Session</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Seller Camera -->
+      <div class="camera-section">
+        <div class="video-container" id="sellerVideoContainer">
+          <video id="sellerVideo" autoplay playsinline muted></video>
+          <canvas id="sellerOverlayCanvas"></canvas>
+          <div class="scan-overlay hidden" id="scanOverlay">
+            <div class="scan-line"></div>
+          </div>
+          <span class="badge badge-live hidden" id="liveBadge" style="position:absolute;top:12px;left:12px;">● LIVE</span>
+        </div>
+        <div class="camera-controls">
+          <button class="control-btn" id="switchCameraBtn" title="Switch Camera">🔄</button>
+          <button class="control-btn" id="micToggleBtn" title="Mute Mic">🎤</button>
+          <button class="control-btn" id="startCameraBtn" title="Start Camera">📷</button>
+        </div>
+      </div>
+
+      <!-- Garment Capture -->
+      <div class="capture-section">
+        <button class="btn btn-primary capture-btn" id="captureBtn" style="background: linear-gradient(135deg, var(--accent2) 0%, #e06a4f 100%); box-shadow: 0 4px 16px var(--accent2-glow);">
+          📸 Capture Garment
+        </button>
+      </div>
+
+      <!-- Captured Garments Strip -->
+      <div class="garment-strip-section">
+        <div class="garment-strip-header">Captured Garments</div>
+        <div class="garment-strip" id="garmentStrip">
+          <div class="no-garments" id="noGarments">No garments captured yet</div>
+        </div>
+      </div>
+
+      <!-- AI Controls Panel -->
+      <div class="ai-panel">
+        <div class="ai-panel-header" id="aiToggle">
+          <span style="font-size:0.85rem;font-weight:500;">🤖 AI Controls</span>
+          <span>▼</span>
+        </div>
+        <div class="ai-panel-body" id="aiBody">
+          <div class="ai-option">
+            <span class="ai-option-label">Auto-detect clothing</span>
+            <div class="toggle" id="autoDetectToggle"></div>
+          </div>
+          <div class="ai-option">
+            <span class="ai-option-label">Pose skeleton overlay</span>
+            <div class="toggle" id="poseToggle"></div>
+          </div>
+          <div class="ai-option">
+            <span class="ai-option-label">BG removal quality</span>
+            <select class="input" id="bgQuality" style="width:auto;padding:6px 12px;font-size:0.8rem;">
+              <option value="fast">Fast</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats Bar -->
+    <div class="stats-bar seller-stats">
+      <div class="stat-item">
+        <div class="stat-value" id="garmentCount">0</div>
+        <div class="stat-label">Garments</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="sessionDuration">00:00</div>
+        <div class="stat-label">Duration</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="tryOnCount">0</div>
+        <div class="stat-label">Try-Ons</div>
+      </div>
+    </div>
+
+    <!-- Buyer PiP -->
+    <div class="pip-container" id="buyerPip">
+      <video id="buyerVideo" autoplay playsinline></video>
+    </div>
+  </div>
+
+  <!-- Capture Preview Overlay -->
+  <div class="capture-overlay" id="captureOverlay">
+    <h3 style="color:var(--text);font-family:'Syne',sans-serif;">Garment Preview</h3>
+    <img id="capturePreview" class="capture-preview" alt="Captured garment">
+    <p style="color:var(--muted);font-size:0.85rem;" id="captureStatus">Processing...</p>
+    <div class="capture-actions">
+      <button class="btn btn-secondary" id="retakeBtn">↩ Retake</button>
+      <button class="btn btn-primary" id="confirmBtn">✓ Confirm & Send</button>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Modules -->
+  <script src="js/socket.js"></script>
+  <script src="js/webrtc.js"></script>
+  <script src="js/ai.js"></script>
+
+  <script type="module">
+    import { checkAuth, logoutUser, uploadGarmentImage, saveGarment, createRoomDoc, updateRoomStatus } from './js/auth.js';
+
+    // ── State ──
+    let userData = null;
+    let roomId = null;
+    let localStream = null;
+    let isMuted = false;
+    let usingFrontCamera = false;
+    let buyerConnected = false;
+    let garments = [];
+    let garmentCounter = 0;
+    let sessionStartTime = null;
+    let sessionTimer = null;
+    let autoDetectEnabled = false;
+    let poseOverlayEnabled = false;
+    let autoDetectInterval = null;
+    let poseAnimFrame = null;
+    let capturedDataUrl = null;
+
+    // ── Init ──
+    async function init() {
+      try {
+        userData = await checkAuth('seller');
+        document.getElementById('sellerName').textContent = userData.displayName;
+
+        // Load AI models
+        await FVAI.loadModels((progress) => {
+          document.getElementById('loadingText').textContent =
+            `${progress.model}: ${progress.status}`;
+          document.getElementById('progressBar').style.width = progress.percent + '%';
+        });
+
+        // Hide loading
+        document.getElementById('loadingOverlay').classList.add('hidden');
+
+        // Connect socket
+        FVSocket.connectSocket();
+
+        // Set up socket event handlers
+        setupSocketHandlers();
+        setupUI();
+      } catch (error) {
+        console.error('Init error:', error);
+      }
+    }
+
+    // ── Socket Handlers ──
+    function setupSocketHandlers() {
+      FVSocket.onUserJoined(({ role, userName }) => {
+        if (role === 'buyer') {
+          buyerConnected = true;
+          document.getElementById('connectionDot').classList.add('live');
+          document.getElementById('roomStatus').textContent = 'Buyer connected! 🎉';
+          document.getElementById('roomStatus').classList.add('connected');
+          document.getElementById('liveBadge').classList.remove('hidden');
+          document.getElementById('buyerPip').classList.add('visible');
+          showToast(`${userName || 'Buyer'} joined your room!`, 'success');
+
+          // Start WebRTC if we have a local stream
+          if (localStream) {
+            startWebRTC();
+          }
+
+          // Update Firestore room status
+          if (roomId) updateRoomStatus(roomId, 'active');
+        }
+      });
+
+      FVSocket.onOffer(async ({ offer }) => {
+        // Seller usually creates the offer, but handle incoming just in case
+        const answer = await FVWebRTC.handleOffer(offer);
+        FVSocket.sendAnswer(roomId, answer);
+      });
+
+      FVSocket.onAnswer(async ({ answer }) => {
+        await FVWebRTC.handleAnswer(answer);
+      });
+
+      FVSocket.onIceCandidate(async ({ candidate }) => {
+        await FVWebRTC.handleIceCandidate(candidate);
+      });
+
+      FVSocket.onUserLeft(() => {
+        buyerConnected = false;
+        document.getElementById('connectionDot').classList.remove('live');
+        document.getElementById('roomStatus').textContent = 'Buyer disconnected. Waiting...';
+        document.getElementById('roomStatus').classList.remove('connected');
+        document.getElementById('liveBadge').classList.add('hidden');
+        document.getElementById('buyerPip').classList.remove('visible');
+        document.getElementById('buyerVideo').srcObject = null;
+        FVWebRTC.closeConnection();
+        showToast('Buyer left the session', 'error');
+      });
+
+      FVSocket.onRoomFull(() => {
+        showToast('Room is full!', 'error');
+      });
+    }
+
+    // ── WebRTC ──
+    async function startWebRTC() {
+      FVWebRTC.initWebRTC(localStream, (remoteStream) => {
+        document.getElementById('buyerVideo').srcObject = remoteStream;
+      });
+
+      FVWebRTC.onIceCandidateGenerated((candidate) => {
+        FVSocket.sendIceCandidate(roomId, candidate);
+      });
+
+      FVWebRTC.onConnectionStateChange((state) => {
+        console.log('[Seller] WebRTC state:', state);
+      });
+
+      // Seller creates the offer
+      const offer = await FVWebRTC.createOffer();
+      FVSocket.sendOffer(roomId, offer);
+    }
+
+    // ── UI Setup ──
+    function setupUI() {
+      // Create Room
+      document.getElementById('createRoomBtn').addEventListener('click', async () => {
+        try {
+          roomId = await FVSocket.createRoom();
+          FVSocket.joinRoom(roomId, 'seller', userData.uid, userData.displayName);
+          await createRoomDoc(roomId, userData.uid, userData.displayName);
+
+          document.getElementById('roomCreate').classList.add('hidden');
+          document.getElementById('roomInfo').classList.remove('hidden');
+          document.getElementById('roomCode').textContent = roomId;
+          document.getElementById('roomStatus').textContent = 'Waiting for buyer...';
+
+          // Start session timer
+          sessionStartTime = Date.now();
+          sessionTimer = setInterval(updateDuration, 1000);
+
+          showToast('Room created! Share the code with your buyer', 'success');
+        } catch (err) {
+          showToast('Failed to create room: ' + err.message, 'error');
+        }
+      });
+
+      // Share Link
+      document.getElementById('shareBtn').addEventListener('click', () => {
+        const baseUrl = window.location.origin + window.location.pathname.replace('seller.html', '');
+        const link = `${baseUrl}buyer.html?room=${roomId}`;
+        navigator.clipboard.writeText(link).then(() => {
+          showToast('Link copied to clipboard! 📋', 'success');
+        }).catch(() => {
+          showToast(link, '');
+        });
+      });
+
+      // End Room
+      document.getElementById('endRoomBtn').addEventListener('click', () => {
+        if (roomId) {
+          FVSocket.leaveRoom(roomId);
+          FVWebRTC.closeConnection();
+          updateRoomStatus(roomId, 'ended');
+          clearInterval(sessionTimer);
+          roomId = null;
+          buyerConnected = false;
+          document.getElementById('roomCreate').classList.remove('hidden');
+          document.getElementById('roomInfo').classList.add('hidden');
+          document.getElementById('connectionDot').classList.remove('live');
+          document.getElementById('liveBadge').classList.add('hidden');
+          document.getElementById('buyerPip').classList.remove('visible');
+          showToast('Session ended', '');
+        }
+      });
+
+      // Start Camera
+      document.getElementById('startCameraBtn').addEventListener('click', startCamera);
+
+      // Switch Camera
+      document.getElementById('switchCameraBtn').addEventListener('click', switchCamera);
+
+      // Mic Toggle
+      document.getElementById('micToggleBtn').addEventListener('click', toggleMic);
+
+      // Capture Garment
+      document.getElementById('captureBtn').addEventListener('click', captureGarment);
+
+      // Retake
+      document.getElementById('retakeBtn').addEventListener('click', () => {
+        document.getElementById('captureOverlay').classList.remove('active');
+        capturedDataUrl = null;
+      });
+
+      // Confirm Capture
+      document.getElementById('confirmBtn').addEventListener('click', confirmCapture);
+
+      // AI Toggle Panel
+      document.getElementById('aiToggle').addEventListener('click', () => {
+        const body = document.getElementById('aiBody');
+        const arrow = document.querySelector('#aiToggle span:last-child');
+        body.classList.toggle('open');
+        arrow.textContent = body.classList.contains('open') ? '▲' : '▼';
+      });
+
+      // Auto-detect toggle
+      document.getElementById('autoDetectToggle').addEventListener('click', function() {
+        this.classList.toggle('active');
+        autoDetectEnabled = this.classList.contains('active');
+        if (autoDetectEnabled) startAutoDetect();
+        else stopAutoDetect();
+      });
+
+      // Pose toggle
+      document.getElementById('poseToggle').addEventListener('click', function() {
+        this.classList.toggle('active');
+        poseOverlayEnabled = this.classList.contains('active');
+        if (poseOverlayEnabled) startPoseOverlay();
+        else stopPoseOverlay();
+      });
+
+      // Logout
+      document.getElementById('logoutBtn').addEventListener('click', () => {
+        if (roomId) {
+          FVSocket.leaveRoom(roomId);
+          FVWebRTC.closeConnection();
+        }
+        logoutUser();
+      });
+    }
+
+    // ── Camera ──
+    async function startCamera() {
+      try {
+        const constraints = {
+          video: {
+            facingMode: usingFrontCamera ? 'user' : 'environment',
+            width: { ideal: 1280, min: 640 },
+            height: { ideal: 720, min: 480 }
+          },
+          audio: true
+        };
+
+        localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        document.getElementById('sellerVideo').srcObject = localStream;
+        document.getElementById('startCameraBtn').classList.add('active');
+        showToast('Camera started', 'success');
+
+        // If buyer is already connected, start WebRTC
+        if (buyerConnected) startWebRTC();
+      } catch (error) {
+        console.error('Camera error:', error);
+        showToast('Camera not available. Demo mode active.', 'error');
+        // Demo mode: use a colored canvas
+        startDemoMode();
+      }
+    }
+
+    async function switchCamera() {
+      usingFrontCamera = !usingFrontCamera;
+      if (localStream) {
+        localStream.getVideoTracks().forEach(t => t.stop());
+      }
+
+      try {
+        const constraints = {
+          video: { facingMode: usingFrontCamera ? 'user' : 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: true
+        };
+        const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+        document.getElementById('sellerVideo').srcObject = newStream;
+
+        // Replace track in WebRTC
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        if (newVideoTrack) {
+          await FVWebRTC.replaceTrack(newVideoTrack);
+        }
+
+        // Preserve audio track
+        const oldAudioTrack = localStream.getAudioTracks()[0];
+        localStream = newStream;
+        if (oldAudioTrack && isMuted) {
+          localStream.getAudioTracks().forEach(t => t.enabled = false);
+        }
+
+        showToast(`Switched to ${usingFrontCamera ? 'front' : 'rear'} camera`, 'success');
+      } catch (error) {
+        showToast('Failed to switch camera', 'error');
+      }
+    }
+
+    function toggleMic() {
+      if (!localStream) return;
+      isMuted = !isMuted;
+      localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+      const btn = document.getElementById('micToggleBtn');
+      btn.textContent = isMuted ? '🔇' : '🎤';
+      btn.classList.toggle('active', !isMuted);
+    }
+
+    function startDemoMode() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 480;
+      const ctx = canvas.getContext('2d');
+
+      // Draw demo pattern
+      function drawDemo() {
+        const t = Date.now() / 1000;
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, 640, 480);
+        ctx.fillStyle = '#7c6ff7';
+        ctx.font = '24px Syne, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('📷 Demo Mode', 320, 200);
+        ctx.font = '14px DM Sans, sans-serif';
+        ctx.fillStyle = '#888';
+        ctx.fillText('Camera not available', 320, 240);
+        // Animated circle
+        ctx.beginPath();
+        ctx.arc(320, 320, 30 + Math.sin(t * 2) * 10, 0, Math.PI * 2);
+        ctx.strokeStyle = '#7c6ff7';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      drawDemo();
+      setInterval(drawDemo, 100);
+      const stream = canvas.captureStream(10);
+      document.getElementById('sellerVideo').srcObject = stream;
+      localStream = stream;
+    }
+
+    // ── Garment Capture ──
+    async function captureGarment() {
+      const video = document.getElementById('sellerVideo');
+      if (!video.srcObject) {
+        showToast('Start camera first!', 'error');
+        return;
+      }
+
+      document.getElementById('captureOverlay').classList.add('active');
+      document.getElementById('captureStatus').textContent = 'Removing background...';
+      document.getElementById('confirmBtn').disabled = true;
+
+      try {
+        // Run background removal
+        capturedDataUrl = await FVAI.removeBackground(video);
+        document.getElementById('capturePreview').src = capturedDataUrl;
+        document.getElementById('captureStatus').textContent = 'Background removed ✓';
+        document.getElementById('confirmBtn').disabled = false;
+      } catch (error) {
+        // Fallback: just capture raw frame
+        capturedDataUrl = FVAI.captureFrame(video, 0.8);
+        document.getElementById('capturePreview').src = capturedDataUrl;
+        document.getElementById('captureStatus').textContent = 'Captured (no BG removal)';
+        document.getElementById('confirmBtn').disabled = false;
+      }
+    }
+
+    async function confirmCapture() {
+      if (!capturedDataUrl) return;
+
+      garmentCounter++;
+      const garmentName = `Garment ${garmentCounter}`;
+
+      // Add to strip
+      addGarmentToStrip(capturedDataUrl, garmentName);
+
+      // Emit to buyer via socket
+      if (roomId && buyerConnected) {
+        FVSocket.emitGarmentCaptured(roomId, capturedDataUrl, garmentName, true);
+      }
+
+      // Save to Firebase (async, don't block)
+      if (userData) {
+        uploadGarmentImage(userData.uid, capturedDataUrl).then(result => {
+          if (result.success) {
+            saveGarment(userData.uid, roomId || '', result.url, garmentName, true);
+          }
+        });
+      }
+
+      // Update stats
+      document.getElementById('garmentCount').textContent = garmentCounter;
+
+      // Close overlay
+      document.getElementById('captureOverlay').classList.remove('active');
+      capturedDataUrl = null;
+      showToast(`${garmentName} captured & sent! ✨`, 'success');
+    }
+
+    function addGarmentToStrip(dataUrl, name) {
+      document.getElementById('noGarments').classList.add('hidden');
+      const strip = document.getElementById('garmentStrip');
+
+      const card = document.createElement('div');
+      card.className = 'garment-card';
+      card.innerHTML = `
+        <img src="${dataUrl}" alt="${name}">
+        <div class="garment-name">${name}</div>
+      `;
+
+      // Click to re-send
+      card.addEventListener('click', () => {
+        if (roomId && buyerConnected) {
+          FVSocket.emitGarmentCaptured(roomId, dataUrl, name, true);
+          showToast(`Re-sent ${name}`, 'success');
+        }
+      });
+
+      // Long press to delete
+      let pressTimer;
+      card.addEventListener('touchstart', () => {
+        pressTimer = setTimeout(() => {
+          card.remove();
+          garmentCounter--;
+          document.getElementById('garmentCount').textContent = Math.max(0, garmentCounter);
+          showToast(`${name} deleted`, '');
+        }, 800);
+      });
+      card.addEventListener('touchend', () => clearTimeout(pressTimer));
+
+      strip.appendChild(card);
+    }
+
+    // ── AI Features ──
+    function startAutoDetect() {
+      const video = document.getElementById('sellerVideo');
+      const overlay = document.getElementById('scanOverlay');
+      overlay.classList.remove('hidden');
+
+      autoDetectInterval = setInterval(async () => {
+        if (!video.srcObject) return;
+        // Could call FVAI.getPose to detect clothing areas
+        const pose = await FVAI.getPose(video);
+        if (pose) {
+          // Auto-detect logic would go here
+          console.log('[AI] Auto-detect scan complete');
+        }
+      }, 1000);
+    }
+
+    function stopAutoDetect() {
+      clearInterval(autoDetectInterval);
+      document.getElementById('scanOverlay').classList.add('hidden');
+    }
+
+    function startPoseOverlay() {
+      const video = document.getElementById('sellerVideo');
+      const canvas = document.getElementById('sellerOverlayCanvas');
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+
+      async function drawPose() {
+        if (!poseOverlayEnabled) return;
+        const keypoints = await FVAI.getPose(video);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (keypoints) {
+          FVAI.drawPoseSkeleton(ctx, keypoints, canvas.width, canvas.height);
+        }
+        poseAnimFrame = requestAnimationFrame(drawPose);
+      }
+      drawPose();
+    }
+
+    function stopPoseOverlay() {
+      if (poseAnimFrame) cancelAnimationFrame(poseAnimFrame);
+      const canvas = document.getElementById('sellerOverlayCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // ── Timer ──
+    function updateDuration() {
+      if (!sessionStartTime) return;
+      const elapsed = Math.floor((Date.now() - sessionStartTime) / 1000);
+      const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
+      const secs = String(elapsed % 60).padStart(2, '0');
+      document.getElementById('sessionDuration').textContent = `${mins}:${secs}`;
+    }
+
+    // ── Toast ──
+    function showToast(message, type) {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type ? 'toast-' + type : ''}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    // ── Visibility change — stop AI when tab is hidden ──
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        stopAutoDetect();
+        stopPoseOverlay();
+      }
+    });
+
+    // ── Start ──
+    init();
+  </script>
+</body>
+</html>

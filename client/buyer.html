@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FitVision — Buyer Dashboard</title>
+  <meta name="description" content="FitVision Buyer: Watch seller's live stream, try on clothes with AR, and build your wishlist.">
+  <link rel="stylesheet" href="css/style.css">
+  <!-- Socket.io -->
+  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js"></script>
+  <!-- TensorFlow.js & Models -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.1/dist/body-segmentation.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2/dist/face-detection.js"></script>
+  <style>
+    .buyer-page { display: grid; grid-template-columns: 1fr 1fr; min-height: 100vh; }
+    .buyer-page .left-col { border-right: 1px solid var(--border); display: flex; flex-direction: column; height: 100vh; overflow-y: auto; }
+    .buyer-page .right-col { display: flex; flex-direction: column; height: 100vh; overflow-y: auto; }
+
+    @media (max-width: 768px) {
+      .buyer-page { grid-template-columns: 1fr; }
+      .buyer-page .left-col { border-right: none; border-bottom: 1px solid var(--border); height: auto; max-height: 50vh; }
+      .buyer-page .right-col { height: auto; }
+    }
+
+    /* Seller video area */
+    .seller-video-section { padding: 16px; flex-shrink: 0; }
+    .seller-video-wrapper { position: relative; }
+    .seller-video-wrapper .badge-live { position: absolute; top: 12px; left: 12px; z-index: 10; }
+    .seller-name-badge { position: absolute; bottom: 12px; left: 12px; z-index: 10; }
+
+    /* Garment cards area */
+    .garments-section { padding: 0 16px 16px; flex: 1; overflow-y: auto; }
+    .garments-section .section-title { display: flex; align-items: center; justify-content: space-between; }
+    .garment-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+
+    /* AR try-on area */
+    .tryon-section { padding: 16px; flex: 1; position: relative; }
+    .ar-video-wrapper { position: relative; width: 100%; border-radius: var(--radius-lg); overflow: hidden; background: #000; aspect-ratio: 4/3; }
+    .ar-video-wrapper video { width: 100%; height: 100%; object-fit: cover; }
+    .ar-video-wrapper canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+    .ar-controls { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
+    .current-garment-label { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+
+    /* Room join bar */
+    .room-join-bar { display: flex; gap: 8px; padding: 0 16px 12px; }
+    .room-join-bar .input { flex: 1; }
+
+    /* Wishlist sidebar */
+    .wishlist-section { border-top: 1px solid var(--border); padding: 16px; }
+
+    /* Bottom controls */
+    .buyer-controls { padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--border); display: flex; justify-content: center; gap: 12px; flex-shrink: 0; }
+
+    .no-garments-msg { text-align: center; padding: 30px 20px; color: var(--muted); font-size: 0.85rem; }
+
+    /* Mannequin modal */
+    .mannequin-canvas { width: 100%; max-width: 360px; border-radius: var(--radius-lg); border: 1px solid var(--border); display: block; margin: 0 auto; background: #0a0a0f; }
+    .mannequin-actions { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="logo logo-lg">FitVision</div>
+    <div class="spinner spinner-lg"></div>
+    <div class="loading-text" id="loadingText">Initializing AI models...</div>
+    <div class="loading-progress">
+      <div class="loading-progress-bar" id="progressBar" style="width: 0%"></div>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header class="header" style="position:fixed;top:0;left:0;right:0;z-index:500;">
+    <div class="header-left">
+      <span class="logo">FitVision</span>
+      <span class="badge badge-accent">Buyer</span>
+    </div>
+    <div class="header-right">
+      <span class="user-info" id="buyerName">Buyer</span>
+      <button class="btn btn-ghost btn-sm" id="logoutBtn">Logout</button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <div class="buyer-page" style="padding-top:60px;">
+    <!-- Left Column: Seller's video + garments -->
+    <div class="left-col">
+      <!-- Room Join -->
+      <div style="padding:16px 16px 0;">
+        <div class="section-title" style="margin-bottom:8px;">Join a Room</div>
+      </div>
+      <div class="room-join-bar">
+        <input type="text" class="input" id="roomCodeInput" placeholder="Enter room code (e.g. ABC123)" maxlength="6" style="text-transform:uppercase;letter-spacing:2px;font-weight:600;">
+        <button class="btn btn-primary" id="joinRoomBtn">Join</button>
+      </div>
+
+      <!-- Connection Status -->
+      <div id="connectionStatus" class="hidden" style="padding:0 16px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="status-dot" id="connDot"></span>
+          <span class="text-sm text-muted" id="connText">Connecting...</span>
+        </div>
+      </div>
+
+      <!-- Seller Video -->
+      <div class="seller-video-section">
+        <div class="seller-video-wrapper">
+          <div class="video-container">
+            <video id="sellerVideo" autoplay playsinline></video>
+            <span class="badge badge-live hidden" id="sellerLiveBadge">● LIVE</span>
+            <span class="badge badge-accent seller-name-badge hidden" id="sellerNameBadge"></span>
+          </div>
+        </div>
+        <div id="noVideoMsg" style="text-align:center;padding:40px 20px;color:var(--muted);">
+          <p style="font-size:2rem;margin-bottom:8px;">📺</p>
+          <p>Join a room to see the seller's live stream</p>
+        </div>
+      </div>
+
+      <!-- Captured Garments -->
+      <div class="garments-section">
+        <div class="section-title">
+          <span>Garments from Seller</span>
+          <span class="badge badge-accent" id="garmentBadge">0</span>
+        </div>
+        <div class="garment-cards-grid" id="garmentGrid">
+          <div class="no-garments-msg" id="noGarmentsMsg">
+            <p>🎽</p>
+            <p>Garments will appear here as the seller captures them</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Buyer camera + AR try-on -->
+    <div class="right-col">
+      <!-- AR Try-On -->
+      <div class="tryon-section">
+        <div class="section-title">AR Try-On Mirror</div>
+        <div class="ar-video-wrapper" id="arVideoWrapper">
+          <video id="buyerVideo" autoplay playsinline muted></video>
+          <canvas id="arCanvas"></canvas>
+        </div>
+        <div class="current-garment-label" id="currentGarmentLabel">No garment selected</div>
+        <div class="ar-controls">
+          <button class="control-btn" id="arToggleBtn" title="Toggle AR">👕</button>
+          <button class="control-btn" id="screenshotBtn" title="Screenshot">📸</button>
+          <button class="control-btn" id="mannequinBtn" title="Mannequin View">🧍</button>
+          <button class="control-btn" id="cameraToggleBtn" title="Toggle Camera">📷</button>
+          <button class="control-btn" id="micBtn" title="Toggle Mic">🎤</button>
+        </div>
+      </div>
+
+      <!-- Wishlist -->
+      <div class="wishlist-section">
+        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>💝 Wishlist</span>
+          <button class="btn btn-ghost btn-sm" id="shareWishlistBtn">Share</button>
+        </div>
+        <div class="wishlist-grid" id="wishlistGrid">
+          <div class="no-garments-msg" id="noWishlistMsg" style="grid-column:1/-1;">
+            <p>Save garments you like here</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Controls -->
+      <div class="buyer-controls">
+        <button class="control-btn active" id="arToggle2" title="AR Overlay">👕</button>
+        <button class="control-btn" id="mannequinToggle" title="Mannequin View">🧍</button>
+        <button class="control-btn" id="micToggle" title="Mic">🎤</button>
+        <button class="control-btn" id="camToggle" title="Camera">📷</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mannequin Face Swap Modal -->
+  <div class="modal-overlay" id="mannequinModal">
+    <div class="modal-content" style="max-width:420px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="font-family:'Syne',sans-serif;">🧍 Mannequin Preview</h3>
+        <button class="btn btn-ghost btn-sm" id="closeModal">✕</button>
+      </div>
+      <canvas id="mannequinCanvas" class="mannequin-canvas" width="360" height="500"></canvas>
+      <div class="mannequin-actions">
+        <button class="btn btn-secondary btn-sm" id="mannequinScreenshot">📸 Screenshot</button>
+        <button class="btn btn-primary btn-sm" id="mannequinWishlist">💝 Save to Wishlist</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Modules -->
+  <script src="js/socket.js"></script>
+  <script src="js/webrtc.js"></script>
+  <script src="js/ai.js"></script>
+
+  <script type="module">
+    import { checkAuth, logoutUser } from './js/auth.js';
+
+    // ── State ──
+    let userData = null;
+    let roomId = null;
+    let localStream = null;
+    let isMuted = false;
+    let cameraOn = true;
+    let arEnabled = true;
+    let selectedGarment = null;
+    let selectedGarmentImg = null;
+    let garments = [];
+    let wishlist = [];
+    let poseLoopId = null;
+    let mannequinLoopId = null;
+
+    // ── Init ──
+    async function init() {
+      try {
+        userData = await checkAuth('buyer');
+        document.getElementById('buyerName').textContent = userData.displayName;
+
+        // Load AI models
+        await FVAI.loadModels((progress) => {
+          document.getElementById('loadingText').textContent =
+            `${progress.model}: ${progress.status}`;
+          document.getElementById('progressBar').style.width = progress.percent + '%';
+        });
+
+        document.getElementById('loadingOverlay').classList.add('hidden');
+
+        // Connect socket
+        FVSocket.connectSocket();
+        setupSocketHandlers();
+        setupUI();
+
+        // Check for ?room= query param
+        const params = new URLSearchParams(window.location.search);
+        const roomParam = params.get('room');
+        if (roomParam) {
+          document.getElementById('roomCodeInput').value = roomParam;
+          joinRoom(roomParam);
+        }
+
+        // Start camera
+        startCamera();
+      } catch (error) {
+        console.error('Init error:', error);
+      }
+    }
+
+    // ── Camera ──
+    async function startCamera() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: true
+        });
+        document.getElementById('buyerVideo').srcObject = localStream;
+
+        // Wait for video metadata to load, then set canvas size
+        const video = document.getElementById('buyerVideo');
+        video.addEventListener('loadedmetadata', () => {
+          const canvas = document.getElementById('arCanvas');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+        });
+      } catch (error) {
+        console.error('Camera error:', error);
+        showToast('Camera not available. Starting demo mode...', 'error');
+        startDemoMode();
+      }
+    }
+
+    function startDemoMode() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 480;
+      const ctx = canvas.getContext('2d');
+      function draw() {
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, 640, 480);
+        ctx.fillStyle = '#7c6ff7';
+        ctx.font = '20px Syne, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('📷 Demo Mode', 320, 220);
+        ctx.font = '13px DM Sans, sans-serif';
+        ctx.fillStyle = '#888';
+        ctx.fillText('Camera not available', 320, 250);
+      }
+      draw();
+      setInterval(draw, 200);
+      const stream = canvas.captureStream(10);
+      document.getElementById('buyerVideo').srcObject = stream;
+      localStream = stream;
+
+      const arCanvas = document.getElementById('arCanvas');
+      arCanvas.width = 640;
+      arCanvas.height = 480;
+    }
+
+    // ── Socket ──
+    function setupSocketHandlers() {
+      FVSocket.onUserJoined(({ role, userName }) => {
+        if (role === 'seller') {
+          document.getElementById('connDot').classList.add('live');
+          document.getElementById('connText').textContent = `${userName || 'Seller'} is live`;
+          document.getElementById('sellerLiveBadge').classList.remove('hidden');
+          document.getElementById('sellerNameBadge').classList.remove('hidden');
+          document.getElementById('sellerNameBadge').textContent = userName || 'Seller';
+          showToast(`Connected to ${userName || 'Seller'}!`, 'success');
+        }
+      });
+
+      FVSocket.onOffer(async ({ offer }) => {
+        FVWebRTC.initWebRTC(localStream, (remoteStream) => {
+          document.getElementById('sellerVideo').srcObject = remoteStream;
+          document.getElementById('noVideoMsg').classList.add('hidden');
+        });
+
+        FVWebRTC.onIceCandidateGenerated((candidate) => {
+          FVSocket.sendIceCandidate(roomId, candidate);
+        });
+
+        const answer = await FVWebRTC.handleOffer(offer);
+        FVSocket.sendAnswer(roomId, answer);
+      });
+
+      FVSocket.onAnswer(async ({ answer }) => {
+        await FVWebRTC.handleAnswer(answer);
+      });
+
+      FVSocket.onIceCandidate(async ({ candidate }) => {
+        await FVWebRTC.handleIceCandidate(candidate);
+      });
+
+      FVSocket.onUserLeft(() => {
+        document.getElementById('connDot').classList.remove('live');
+        document.getElementById('connText').textContent = 'Seller disconnected';
+        document.getElementById('sellerLiveBadge').classList.add('hidden');
+        document.getElementById('sellerVideo').srcObject = null;
+        document.getElementById('noVideoMsg').classList.remove('hidden');
+        FVWebRTC.closeConnection();
+        showToast('Seller left the session', 'error');
+      });
+
+      FVSocket.onRoomFull(() => {
+        showToast('This room is full. Ask the seller for a new link.', 'error');
+      });
+
+      FVSocket.onGarmentCaptured((data) => {
+        addGarment(data);
+        showToast('New garment captured! ✨', 'success');
+      });
+    }
+
+    // ── Room Join ──
+    function joinRoom(code) {
+      roomId = code.toUpperCase();
+      FVSocket.joinRoom(roomId, 'buyer', userData.uid, userData.displayName);
+      document.getElementById('connectionStatus').classList.remove('hidden');
+      document.getElementById('connText').textContent = 'Connected to room ' + roomId;
+      document.getElementById('connDot').classList.add('live');
+    }
+
+    // ── UI Setup ──
+    function setupUI() {
+      // Join room
+      document.getElementById('joinRoomBtn').addEventListener('click', () => {
+        const code = document.getElementById('roomCodeInput').value.trim();
+        if (code.length < 4) {
+          showToast('Enter a valid room code', 'error');
+          return;
+        }
+        joinRoom(code);
+      });
+
+      document.getElementById('roomCodeInput').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') document.getElementById('joinRoomBtn').click();
+      });
+
+      // AR Toggle
+      document.getElementById('arToggleBtn').addEventListener('click', toggleAR);
+      document.getElementById('arToggle2').addEventListener('click', toggleAR);
+
+      // Screenshot
+      document.getElementById('screenshotBtn').addEventListener('click', takeScreenshot);
+
+      // Mannequin modal
+      document.getElementById('mannequinBtn').addEventListener('click', openMannequin);
+      document.getElementById('mannequinToggle').addEventListener('click', openMannequin);
+      document.getElementById('closeModal').addEventListener('click', closeMannequin);
+
+      // Mannequin screenshot
+      document.getElementById('mannequinScreenshot').addEventListener('click', () => {
+        const canvas = document.getElementById('mannequinCanvas');
+        downloadCanvas(canvas, 'mannequin_preview.png');
+      });
+
+      // Mannequin wishlist
+      document.getElementById('mannequinWishlist').addEventListener('click', () => {
+        const canvas = document.getElementById('mannequinCanvas');
+        addToWishlist(canvas.toDataURL('image/png'), 'Mannequin Preview');
+        showToast('Saved to wishlist!', 'success');
+      });
+
+      // Camera toggle
+      document.getElementById('cameraToggleBtn').addEventListener('click', toggleCamera);
+      document.getElementById('camToggle').addEventListener('click', toggleCamera);
+
+      // Mic toggle
+      document.getElementById('micBtn').addEventListener('click', toggleMic);
+      document.getElementById('micToggle').addEventListener('click', toggleMic);
+
+      // Share wishlist
+      document.getElementById('shareWishlistBtn').addEventListener('click', shareWishlist);
+
+      // Logout
+      document.getElementById('logoutBtn').addEventListener('click', () => {
+        if (roomId) {
+          FVSocket.leaveRoom(roomId);
+          FVWebRTC.closeConnection();
+        }
+        logoutUser();
+      });
+
+      // Visibility change — stop pose loop when hidden
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          stopPoseLoop();
+        } else if (arEnabled && selectedGarmentImg) {
+          startPoseLoop();
+        }
+      });
+    }
+
+    // ── Garment Management ──
+    function addGarment(data) {
+      const { garmentDataUrl, garmentName, timestamp } = data;
+      const garment = { dataUrl: garmentDataUrl, name: garmentName, timestamp };
+      garments.push(garment);
+
+      document.getElementById('noGarmentsMsg').classList.add('hidden');
+      document.getElementById('garmentBadge').textContent = garments.length;
+
+      const grid = document.getElementById('garmentGrid');
+      const card = document.createElement('div');
+      card.className = 'garment-grid-card';
+      card.innerHTML = `
+        <img src="${garmentDataUrl}" alt="${garmentName}">
+        <div class="garment-actions">
+          <button class="btn btn-primary btn-sm tryon-btn">Try On</button>
+          <button class="btn btn-ghost btn-sm wishlist-btn">💝</button>
+        </div>
+      `;
+
+      card.querySelector('.tryon-btn').addEventListener('click', () => {
+        selectGarment(garmentDataUrl, garmentName);
+      });
+
+      card.querySelector('.wishlist-btn').addEventListener('click', () => {
+        addToWishlist(garmentDataUrl, garmentName);
+        showToast(`${garmentName} added to wishlist!`, 'success');
+      });
+
+      grid.appendChild(card);
+    }
+
+    function selectGarment(dataUrl, name) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        selectedGarmentImg = img;
+        selectedGarment = { dataUrl, name };
+        document.getElementById('currentGarmentLabel').textContent = `Trying on: ${name}`;
+
+        if (arEnabled) startPoseLoop();
+        showToast(`AR Try-on: ${name}`, 'success');
+      };
+      img.src = dataUrl;
+    }
+
+    // ── AR Pose Loop ──
+    function startPoseLoop() {
+      stopPoseLoop();
+
+      const video = document.getElementById('buyerVideo');
+      const canvas = document.getElementById('arCanvas');
+      const ctx = canvas.getContext('2d');
+
+      async function loop() {
+        if (!arEnabled || !selectedGarmentImg) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          return;
+        }
+
+        const keypoints = await FVAI.getPose(video);
+        if (keypoints) {
+          FVAI.drawAROverlay(ctx, canvas.width, canvas.height, selectedGarmentImg, keypoints);
+        }
+
+        poseLoopId = requestAnimationFrame(loop);
+      }
+
+      loop();
+    }
+
+    function stopPoseLoop() {
+      if (poseLoopId) {
+        cancelAnimationFrame(poseLoopId);
+        poseLoopId = null;
+      }
+    }
+
+    // ── AR Toggle ──
+    function toggleAR() {
+      arEnabled = !arEnabled;
+      const btns = [document.getElementById('arToggleBtn'), document.getElementById('arToggle2')];
+      btns.forEach(b => b.classList.toggle('active', arEnabled));
+
+      if (arEnabled && selectedGarmentImg) {
+        startPoseLoop();
+      } else {
+        stopPoseLoop();
+        const canvas = document.getElementById('arCanvas');
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+
+      showToast(arEnabled ? 'AR overlay enabled' : 'AR overlay disabled', '');
+    }
+
+    // ── Screenshot ──
+    function takeScreenshot() {
+      const video = document.getElementById('buyerVideo');
+      const arCanvas = document.getElementById('arCanvas');
+
+      const compositeCanvas = document.createElement('canvas');
+      compositeCanvas.width = video.videoWidth || 640;
+      compositeCanvas.height = video.videoHeight || 480;
+      const ctx = compositeCanvas.getContext('2d');
+
+      // Draw video frame
+      ctx.drawImage(video, 0, 0, compositeCanvas.width, compositeCanvas.height);
+
+      // Draw AR overlay on top
+      if (arEnabled) {
+        ctx.drawImage(arCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+      }
+
+      downloadCanvas(compositeCanvas, `fitvision_tryon_${Date.now()}.png`);
+      showToast('Screenshot saved!', 'success');
+    }
+
+    function downloadCanvas(canvas, filename) {
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    // ── Camera / Mic Toggles ──
+    function toggleCamera() {
+      if (!localStream) return;
+      cameraOn = !cameraOn;
+      localStream.getVideoTracks().forEach(t => t.enabled = cameraOn);
+      const btns = [document.getElementById('cameraToggleBtn'), document.getElementById('camToggle')];
+      btns.forEach(b => {
+        b.classList.toggle('active', cameraOn);
+        b.textContent = cameraOn ? '📷' : '🚫';
+      });
+    }
+
+    function toggleMic() {
+      if (!localStream) return;
+      isMuted = !isMuted;
+      localStream.getAudioTracks().forEach(t => t.enabled = !isMuted);
+      const btns = [document.getElementById('micBtn'), document.getElementById('micToggle')];
+      btns.forEach(b => {
+        b.classList.toggle('active', !isMuted);
+        b.textContent = isMuted ? '🔇' : '🎤';
+      });
+    }
+
+    // ── Mannequin Face Swap ──
+    function openMannequin() {
+      document.getElementById('mannequinModal').classList.add('active');
+
+      const canvas = document.getElementById('mannequinCanvas');
+      const video = document.getElementById('buyerVideo');
+
+      async function drawMannequin() {
+        const faceData = await FVAI.getFace(video);
+        FVAI.drawMannequinFaceSwap(canvas, selectedGarmentImg, video, faceData);
+        mannequinLoopId = requestAnimationFrame(drawMannequin);
+      }
+
+      drawMannequin();
+    }
+
+    function closeMannequin() {
+      document.getElementById('mannequinModal').classList.remove('active');
+      if (mannequinLoopId) {
+        cancelAnimationFrame(mannequinLoopId);
+        mannequinLoopId = null;
+      }
+    }
+
+    // ── Wishlist ──
+    function addToWishlist(dataUrl, name) {
+      wishlist.push({ dataUrl, name, timestamp: Date.now() });
+      document.getElementById('noWishlistMsg').classList.add('hidden');
+
+      const grid = document.getElementById('wishlistGrid');
+      const item = document.createElement('div');
+      item.className = 'wishlist-item';
+      item.innerHTML = `
+        <img src="${dataUrl}" alt="${name}">
+        <div class="remove-btn" title="Remove">✕</div>
+      `;
+
+      item.querySelector('.remove-btn').addEventListener('click', () => {
+        wishlist = wishlist.filter(w => w.dataUrl !== dataUrl);
+        item.remove();
+        if (wishlist.length === 0) {
+          document.getElementById('noWishlistMsg').classList.remove('hidden');
+        }
+        showToast(`${name} removed from wishlist`, '');
+      });
+
+      grid.appendChild(item);
+    }
+
+    function shareWishlist() {
+      if (wishlist.length === 0) {
+        showToast('Wishlist is empty', 'error');
+        return;
+      }
+
+      // Simple shareable text
+      const text = `🛍️ My FitVision Wishlist:\n${wishlist.map((w, i) => `${i + 1}. ${w.name}`).join('\n')}`;
+
+      if (navigator.share) {
+        navigator.share({ title: 'My FitVision Wishlist', text }).catch(() => {});
+      } else {
+        navigator.clipboard.writeText(text).then(() => {
+          showToast('Wishlist copied to clipboard!', 'success');
+        });
+      }
+    }
+
+    // ── Toast ──
+    function showToast(message, type) {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type ? 'toast-' + type : ''}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    // ── Start ──
+    init();
+  </script>
+</body>
+</html>

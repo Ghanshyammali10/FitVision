@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FitVision — Live Shopping, Try Before You Buy</title>
+  <meta name="description" content="FitVision: Live video shopping platform with AR clothing try-on. Connect sellers and buyers in real-time.">
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .auth-form { display: none; flex-direction: column; gap: 16px; }
+    .auth-form.active { display: flex; }
+    .form-footer { text-align: center; margin-top: 16px; font-size: 0.85rem; color: var(--muted); }
+    .form-footer a { color: var(--accent); cursor: pointer; }
+    .password-wrapper { position: relative; }
+    .password-toggle { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); cursor: pointer; color: var(--muted); font-size: 1.1rem; background: none; border: none; }
+    .login-spinner { display: none; }
+    .login-spinner.active { display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .features-row { display: flex; gap: 16px; margin-top: 32px; justify-content: center; }
+    .feature-chip { display: flex; align-items: center; gap: 6px; padding: 6px 14px; background: var(--surface); border-radius: var(--radius-full); font-size: 0.75rem; color: var(--text-secondary); border: 1px solid var(--border); }
+    .bg-glow { position: fixed; width: 400px; height: 400px; border-radius: 50%; filter: blur(120px); pointer-events: none; z-index: -1; }
+    .bg-glow-1 { top: -100px; left: -100px; background: rgba(124,111,247,0.12); }
+    .bg-glow-2 { bottom: -100px; right: -100px; background: rgba(247,137,111,0.08); }
+  </style>
+</head>
+<body>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <div class="login-container">
+    <div class="login-card">
+      <!-- Logo -->
+      <div class="logo logo-lg text-center" style="display:block;">FitVision</div>
+      <p class="subtitle">Live shopping, try before you buy</p>
+
+      <!-- Auth Toggle -->
+      <div class="auth-toggle" id="authToggle">
+        <button class="auth-toggle-btn active" data-tab="login" id="loginTab">Login</button>
+        <button class="auth-toggle-btn" data-tab="register" id="registerTab">Register</button>
+      </div>
+
+      <!-- Error Display -->
+      <div class="error-message hidden" id="errorMsg">
+        <span>⚠️</span>
+        <span id="errorText"></span>
+      </div>
+
+      <!-- Login Form -->
+      <form class="auth-form active" id="loginForm">
+        <div class="input-group">
+          <label for="loginEmail">Email</label>
+          <input type="email" id="loginEmail" class="input" placeholder="you@example.com" required autocomplete="email">
+        </div>
+        <div class="input-group">
+          <label for="loginPassword">Password</label>
+          <div class="password-wrapper">
+            <input type="password" id="loginPassword" class="input" placeholder="Enter your password" required autocomplete="current-password" minlength="6">
+            <button type="button" class="password-toggle" onclick="togglePassword('loginPassword', this)">👁️</button>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary btn-lg" id="loginBtn">
+            <span id="loginBtnText">Sign In</span>
+            <div class="login-spinner" id="loginSpinner"><div class="spinner"></div></div>
+          </button>
+        </div>
+      </form>
+
+      <!-- Register Form -->
+      <form class="auth-form" id="registerForm">
+        <div class="input-group">
+          <label for="regName">Full Name</label>
+          <input type="text" id="regName" class="input" placeholder="Your name" required autocomplete="name">
+        </div>
+        <div class="input-group">
+          <label for="regEmail">Email</label>
+          <input type="email" id="regEmail" class="input" placeholder="you@example.com" required autocomplete="email">
+        </div>
+        <div class="input-group">
+          <label for="regPassword">Password</label>
+          <div class="password-wrapper">
+            <input type="password" id="regPassword" class="input" placeholder="At least 6 characters" required autocomplete="new-password" minlength="6">
+            <button type="button" class="password-toggle" onclick="togglePassword('regPassword', this)">👁️</button>
+          </div>
+        </div>
+
+        <!-- Role Selector -->
+        <div class="input-group">
+          <label>I am a...</label>
+          <div class="role-selector" id="roleSelector">
+            <div class="role-card" data-role="seller" id="roleSeller">
+              <div class="role-icon">🏪</div>
+              <div class="role-title">Seller</div>
+              <div class="role-desc">I show products live</div>
+            </div>
+            <div class="role-card" data-role="buyer" id="roleBuyer">
+              <div class="role-icon">👤</div>
+              <div class="role-title">Buyer</div>
+              <div class="role-desc">I want to try on clothes</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary btn-lg" id="registerBtn">
+            <span id="regBtnText">Create Account</span>
+            <div class="login-spinner" id="regSpinner"><div class="spinner"></div></div>
+          </button>
+        </div>
+      </form>
+
+      <!-- Feature chips -->
+      <div class="features-row">
+        <div class="feature-chip">📹 Live Video</div>
+        <div class="feature-chip">👕 AR Try-On</div>
+        <div class="feature-chip">🤖 AI Powered</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script type="module">
+    import { registerUser, loginUser } from './js/auth.js';
+
+    // ── DOM Elements ──
+    const loginTab = document.getElementById('loginTab');
+    const registerTab = document.getElementById('registerTab');
+    const loginForm = document.getElementById('loginForm');
+    const registerForm = document.getElementById('registerForm');
+    const errorMsg = document.getElementById('errorMsg');
+    const errorText = document.getElementById('errorText');
+
+    let selectedRole = null;
+
+    // ── Auth Toggle ──
+    loginTab.addEventListener('click', () => switchTab('login'));
+    registerTab.addEventListener('click', () => switchTab('register'));
+
+    function switchTab(tab) {
+      hideError();
+      if (tab === 'login') {
+        loginTab.classList.add('active');
+        registerTab.classList.remove('active');
+        loginForm.classList.add('active');
+        registerForm.classList.remove('active');
+      } else {
+        registerTab.classList.add('active');
+        loginTab.classList.remove('active');
+        registerForm.classList.add('active');
+        loginForm.classList.remove('active');
+      }
+    }
+
+    // ── Role Selector ──
+    document.querySelectorAll('.role-card').forEach(card => {
+      card.addEventListener('click', () => {
+        document.querySelectorAll('.role-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        selectedRole = card.dataset.role;
+      });
+    });
+
+    // ── Login ──
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError();
+
+      const email = document.getElementById('loginEmail').value.trim();
+      const password = document.getElementById('loginPassword').value;
+
+      if (!email || !password) {
+        showError('Please fill in all fields');
+        return;
+      }
+
+      setLoading('loginBtn', 'loginBtnText', 'loginSpinner', true);
+
+      const result = await loginUser(email, password);
+
+      setLoading('loginBtn', 'loginBtnText', 'loginSpinner', false);
+
+      if (result.success) {
+        showToast('Welcome back! Redirecting...', 'success');
+        setTimeout(() => {
+          window.location.href = result.role === 'seller' ? 'seller.html' : 'buyer.html';
+        }, 500);
+      } else {
+        showError(result.error);
+      }
+    });
+
+    // ── Register ──
+    registerForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError();
+
+      const name = document.getElementById('regName').value.trim();
+      const email = document.getElementById('regEmail').value.trim();
+      const password = document.getElementById('regPassword').value;
+
+      if (!name || !email || !password) {
+        showError('Please fill in all fields');
+        return;
+      }
+
+      if (!selectedRole) {
+        showError('Please select your role (Seller or Buyer)');
+        return;
+      }
+
+      setLoading('registerBtn', 'regBtnText', 'regSpinner', true);
+
+      const result = await registerUser(email, password, name, selectedRole);
+
+      setLoading('registerBtn', 'regBtnText', 'regSpinner', false);
+
+      if (result.success) {
+        showToast('Account created! Redirecting...', 'success');
+        setTimeout(() => {
+          window.location.href = result.role === 'seller' ? 'seller.html' : 'buyer.html';
+        }, 500);
+      } else {
+        showError(result.error);
+      }
+    });
+
+    // ── Helpers ──
+    function showError(msg) {
+      errorText.textContent = msg;
+      errorMsg.classList.remove('hidden');
+    }
+
+    function hideError() {
+      errorMsg.classList.add('hidden');
+    }
+
+    function setLoading(btnId, textId, spinnerId, loading) {
+      const btn = document.getElementById(btnId);
+      const text = document.getElementById(textId);
+      const spinner = document.getElementById(spinnerId);
+      btn.disabled = loading;
+      text.style.display = loading ? 'none' : 'inline';
+      spinner.classList.toggle('active', loading);
+    }
+
+    function showToast(message, type) {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${type || ''}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    // Password toggle
+    window.togglePassword = function(inputId, btn) {
+      const input = document.getElementById(inputId);
+      if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = '🙈';
+      } else {
+        input.type = 'password';
+        btn.textContent = '👁️';
+      }
+    };
+  </script>
+</body>
+</html>
