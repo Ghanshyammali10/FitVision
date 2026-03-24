@@ -100,7 +100,12 @@ function checkAuth(requiredRole) {
   return new Promise((resolve, reject) => {
     onAuthStateChanged(auth, async (user) => {
       if (!user) {
-        window.location.href = 'index.html';
+        // Only redirect to login if we're on a protected page (requiredRole specified).
+        // If called from index.html (no requiredRole), just reject — don't redirect
+        // or it creates an infinite reload loop.
+        if (requiredRole) {
+          window.location.href = 'index.html';
+        }
         reject(new Error('Not authenticated'));
         return;
       }
@@ -108,7 +113,9 @@ function checkAuth(requiredRole) {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         if (!userDoc.exists()) {
           await signOut(auth);
-          window.location.href = 'index.html';
+          if (requiredRole) {
+            window.location.href = 'index.html';
+          }
           reject(new Error('User doc not found'));
           return;
         }
