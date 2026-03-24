@@ -70,14 +70,22 @@ io.on('connection', (socket) => {
       rooms[roomId] = [];
     }
 
+    // Remove any previous room membership for this socket
+    leaveAllRooms(socket);
+
+    // Prevent "room full" due to page refreshes or ghost connections
+    // If a user with the same role tries to join again, replace the old one
+    const existingIdx = rooms[roomId].findIndex(p => p.role === role);
+    if (existingIdx !== -1) {
+      console.log(`[Replace Role] Removing old ${role} (${rooms[roomId][existingIdx].socketId}) resolving ghost connection`);
+      rooms[roomId].splice(existingIdx, 1);
+    }
+
     if (rooms[roomId].length >= 2) {
       socket.emit('room-full');
       console.log(`[Room Full] ${roomId} — rejected ${socket.id}`);
       return;
     }
-
-    // Remove any previous room membership for this socket
-    leaveAllRooms(socket);
 
     rooms[roomId].push({ socketId: socket.id, role, userId, userName });
     socket.join(roomId);
