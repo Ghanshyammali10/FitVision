@@ -304,53 +304,191 @@ async function getPose(videoElement) {
 }
 
 // ═══════════════════════════════════════════
-// FRONT / BACK ORIENTATION DETECTION
+// ROBUST FRONT / BACK ORIENTATION DETECTION
 // ═══════════════════════════════════════════
 //
-// Uses MoveNet heuristics:
-//   - FRONT: nose keypoint has high confidence (face visible)
-//   - BACK: nose confidence is low but shoulders are detected
+// Multi-signal scoring system (0 = definitely back, 1 = definitely front):
+//
+//   Signal 1 — Face Visibility (weight 40%)
+//       nose + eyes + ears confidence
+//
+//   Signal 2 — Nose Geometry (weight 25%)
+//       Is the nose vertically ABOVE the shoulder midpoint
+//       and horizontally CENTERED between shoulders?
+//       (Only possible when facing camera)
+//
+//   Signal 3 — Shoulder Width Ratio (weight 20%)
+//       When facing front, both shoulders are equally visible
+//       and the apparent width is consistent.
+//       When turning, one shoulder occludes → width shrinks.
+//
+//   Signal 4 — Torso Coherence (weight 15%)
+//       Do hips align below shoulders in a natural front-facing
+//       geometry? Check hip midpoint is below shoulder midpoint.
+//
+// Temporal Stability:
+//   - Raw score smoothed with EMA (α = 0.15)
+//   - State switch requires score to cross hysteresis thresholds
+//     for at least DEBOUNCE_FRAMES consecutive frames (~300ms)
+//   - Prevents flickering during rotation transitions
 //
 // Returns: 'front' | 'back'
 
-// Smoothed orientation to avoid flickering
-let orientationHistory = [];
-const ORIENTATION_WINDOW = 8; // frames to average
+const orientationState = {
+  current: 'front',          // locked state: 'front' or 'back'
+  rawScore: 0.8,             // smoothed raw score (0→back, 1→front)
+  switchCounter: 0,          // frames the score has been past the threshold
+  recentShoulderWidths: [],  // last N shoulder widths for ratio tracking
+  lastNosePos: null,         // previous nose position for stability
+};
+
+// Tuning constants
+const ORI_EMA_ALPHA = 0.15;        // smoothing for raw score (lower = more stable)
+const ORI_FRONT_THRESHOLD = 0.55;  // score must exceed this to switch TO front
+const ORI_BACK_THRESHOLD = 0.40;   // score must drop below this to switch TO back
+const ORI_DEBOUNCE_FRAMES = 10;    // ~300ms at 30fps — must be stable this long
+const ORI_SHOULDER_HISTORY = 15;   // frames of shoulder width history
 
 function detectOrientation(keypoints) {
-  if (!keypoints) return 'front'; // default
+  if (!keypoints) return orientationState.current;
 
   const kp = {};
   keypoints.forEach(k => { kp[k.name] = k; });
 
-  const nose = kp['nose'];
-  const leftEye = kp['left_eye'];
+  const nose     = kp['nose'];
+  const leftEye  = kp['left_eye'];
   const rightEye = kp['right_eye'];
-  const leftEar = kp['left_ear'];
+  const leftEar  = kp['left_ear'];
   const rightEar = kp['right_ear'];
-  const ls = kp['left_shoulder'];
-  const rs = kp['right_shoulder'];
+  const ls       = kp['left_shoulder'];
+  const rs       = kp['right_shoulder'];
+  const lh       = kp['left_hip'];
+  const rh       = kp['right_hip'];
 
-  // Score face visibility (nose + eyes)
-  const noseConf = nose ? nose.score : 0;
-  const eyeConf = ((leftEye ? leftEye.score : 0) + (rightEye ? rightEye.score : 0)) / 2;
-  const earConf = ((leftEar ? leftEar.score : 0) + (rightEar ? rightEar.score : 0)) / 2;
-
-  // Face score: high when face is visible
-  const faceScore = noseConf * 0.5 + eyeConf * 0.35 + earConf * 0.15;
-
-  // If face is clearly visible → front, otherwise → back
-  const isFront = faceScore > 0.35;
-
-  // Add to history for smoothing
-  orientationHistory.push(isFront ? 1 : 0);
-  if (orientationHistory.length > ORIENTATION_WINDOW) {
-    orientationHistory.shift();
+  // Need at least shoulders to compute anything
+  if (!ls || !rs || ls.score < 0.2 || rs.score < 0.2) {
+    return orientationState.current;
   }
 
-  // Average: if > 50% of recent frames say "front", it's front
-  const avg = orientationHistory.reduce((a, b) => a + b, 0) / orientationHistory.length;
-  return avg > 0.5 ? 'front' : 'back';
+  // ── Signal 1: Face Visibility (0 → 1) ──
+  // Weighted combination of nose, eyes, ears confidence
+  const noseConf = nose ? nose.score : 0;
+  const lEyeConf = leftEye ? leftEye.score : 0;
+  const rEyeConf = rightEye ? rightEye.score : 0;
+  const lEarConf = leftEar ? leftEar.score : 0;
+  const rEarConf = rightEar ? rightEar.score : 0;
+
+  const eyeAvg = (lEyeConf + rEyeConf) / 2;
+  const earAvg = (lEarConf + rEarConf) / 2;
+
+  // Nose is the strongest indicator, eyes second, ears third
+  const faceSignal = Math.min(1, noseConf * 0.50 + eyeAvg * 0.35 + earAvg * 0.15);
+
+  // ── Signal 2: Nose Geometry (0 → 1) ──
+  // If nose exists and is above + centered between shoulders → front
+  let noseGeoSignal = 0;
+  if (nose && nose.score > 0.25) {
+    const shoulderMidX = (ls.x + rs.x) / 2;
+    const shoulderMidY = (ls.y + rs.y) / 2;
+    const shoulderW = Math.abs(rs.x - ls.x);
+
+    if (shoulderW > 10) {
+      // How centered is nose relative to shoulder midpoint? (0=far, 1=centered)
+      const xOffset = Math.abs(nose.x - shoulderMidX) / shoulderW;
+      const centered = Math.max(0, 1 - xOffset * 2); // 1 if x matches, 0 if far
+
+      // Is nose above shoulders? (front-facing people have nose above shoulders)
+      const aboveness = shoulderMidY - nose.y; // positive = nose is above
+      const aboveScore = aboveness > 0 ? Math.min(1, aboveness / (shoulderW * 0.5)) : 0;
+
+      noseGeoSignal = centered * 0.6 + aboveScore * 0.4;
+    }
+  }
+
+  // ── Signal 3: Shoulder Width Consistency (0 → 1) ──
+  // When facing front/back directly, shoulder width is at maximum.
+  // When turning sideways, apparent shoulder width shrinks.
+  // We compare current width to recent average.
+  const currentShoulderW = Math.abs(rs.x - ls.x);
+  let shoulderRatioSignal = 0.5; // neutral default
+
+  orientationState.recentShoulderWidths.push(currentShoulderW);
+  if (orientationState.recentShoulderWidths.length > ORI_SHOULDER_HISTORY) {
+    orientationState.recentShoulderWidths.shift();
+  }
+
+  if (orientationState.recentShoulderWidths.length >= 5) {
+    // Max width seen recently ≈ the "full frontal/back" width
+    const maxW = Math.max(...orientationState.recentShoulderWidths);
+    if (maxW > 20) {
+      const ratio = currentShoulderW / maxW; // 1.0 = full width, <0.7 = turning
+      // Full width (>0.85) suggests front OR back (can't distinguish alone)
+      // But combined with face signals, narrows it down
+      // Very narrow (<0.5) suggests profile/turning = unstable, don't switch
+      shoulderRatioSignal = ratio > 0.7 ? 0.5 + (ratio - 0.7) * 1.67 : ratio;
+      shoulderRatioSignal = Math.max(0, Math.min(1, shoulderRatioSignal));
+    }
+  }
+
+  // ── Signal 4: Torso Coherence (0 → 1) ──
+  // When facing front, hips should be below shoulders in a natural V-shape.
+  // High confidence in all 4 torso points = coherent pose = likely front.
+  let torsoSignal = 0.5; // neutral
+  if (lh && rh && lh.score > 0.2 && rh.score > 0.2) {
+    const hipMidY = (lh.y + rh.y) / 2;
+    const shoulderMidY = (ls.y + rs.y) / 2;
+    const torsoHeight = hipMidY - shoulderMidY;
+
+    // Natural standing pose: torso has positive height, all 4 points confident
+    if (torsoHeight > 0) {
+      const avgConf = (ls.score + rs.score + lh.score + rh.score) / 4;
+      torsoSignal = Math.min(1, avgConf * 1.2);
+    }
+  }
+
+  // ── Combine signals with weights ──
+  const rawFrontScore =
+    faceSignal         * 0.40 +
+    noseGeoSignal      * 0.25 +
+    shoulderRatioSignal * 0.20 +
+    torsoSignal        * 0.15;
+
+  // ── EMA Smoothing ──
+  orientationState.rawScore =
+    orientationState.rawScore * (1 - ORI_EMA_ALPHA) +
+    rawFrontScore * ORI_EMA_ALPHA;
+
+  const smoothedScore = orientationState.rawScore;
+
+  // ── Hysteresis + Debounce State Machine ──
+  // Different thresholds for switching TO front vs TO back prevent
+  // rapid toggling when the score hovers near a single threshold.
+  const wantsFront = smoothedScore > ORI_FRONT_THRESHOLD;
+  const wantsBack  = smoothedScore < ORI_BACK_THRESHOLD;
+
+  if (orientationState.current === 'front' && wantsBack) {
+    orientationState.switchCounter++;
+    if (orientationState.switchCounter >= ORI_DEBOUNCE_FRAMES) {
+      orientationState.current = 'back';
+      orientationState.switchCounter = 0;
+    }
+  } else if (orientationState.current === 'back' && wantsFront) {
+    orientationState.switchCounter++;
+    if (orientationState.switchCounter >= ORI_DEBOUNCE_FRAMES) {
+      orientationState.current = 'front';
+      orientationState.switchCounter = 0;
+    }
+  } else {
+    // Score is in the dead zone or agrees with current state → reset counter
+    orientationState.switchCounter = Math.max(0, orientationState.switchCounter - 2);
+  }
+
+  return orientationState.current;
+}
+
+// Expose the smooth score for crossfade transitions (0=back, 1=front)
+function getOrientationConfidence() {
+  return orientationState.rawScore;
 }
 
 // ═══════════════════════════════════════════
@@ -613,6 +751,7 @@ function isModelLoaded(modelName) {
 // Expose globally
 window.FVAI = {
   loadModels, removeBackground, autoCropGarment, getPose,
-  drawAROverlay, detectOrientation, getFace, drawMannequinFaceSwap,
+  drawAROverlay, detectOrientation, getOrientationConfidence,
+  getFace, drawMannequinFaceSwap,
   isModelLoaded, resetSmoothing
 };
