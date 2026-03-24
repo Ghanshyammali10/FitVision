@@ -73,10 +73,11 @@ function sendIceCandidate(roomId, candidate) {
   socket.emit('ice-candidate', { roomId, candidate });
 }
 
-function sendGarmentCaptured(roomId, garmentDataUrl, garmentName) {
+function sendGarmentCaptured(roomId, garmentDataUrl, garmentName, side) {
   if (!socket) return;
   socket.emit('garment-captured', {
     roomId, garmentDataUrl, garmentName,
+    side: side || 'front',
     timestamp: Date.now()
   });
 }

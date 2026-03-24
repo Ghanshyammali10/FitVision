@@ -80,7 +80,8 @@
       <div class="cam-controls">
         <button class="control-btn active" id="flipBtn" title="Flip Camera">🔄</button>
         <button class="control-btn active" id="micBtn" title="Toggle Mic">🎤</button>
-        <button class="control-btn" id="captureBtn" title="Capture Garment" disabled>📸</button>
+        <button class="control-btn" id="captureFrontBtn" title="Capture Front" disabled style="font-size:0.7rem;">👕 Front</button>
+        <button class="control-btn" id="captureBackBtn" title="Capture Back" disabled style="font-size:0.7rem;">🔙 Back</button>
       </div>
     </div>
 
@@ -161,7 +162,8 @@
           audio: true
         });
         document.getElementById('localVideo').srcObject = localStream;
-        document.getElementById('captureBtn').disabled = false;
+        document.getElementById('captureFrontBtn').disabled = false;
+        document.getElementById('captureBackBtn').disabled = false;
       } catch (e) {
         console.error('Camera error:', e);
         toast('Camera not available', 'error');
@@ -182,7 +184,8 @@
       draw(); setInterval(draw, 500);
       localStream = c.captureStream(10);
       document.getElementById('localVideo').srcObject = localStream;
-      document.getElementById('captureBtn').disabled = false;
+      document.getElementById('captureFrontBtn').disabled = false;
+      document.getElementById('captureBackBtn').disabled = false;
     }
 
     function setupSocket() {
@@ -288,7 +291,8 @@
         btn.classList.toggle('active', !isMuted);
       });
 
-      document.getElementById('captureBtn').addEventListener('click', captureGarment);
+      document.getElementById('captureFrontBtn').addEventListener('click', () => captureGarment('front'));
+      document.getElementById('captureBackBtn').addEventListener('click', () => captureGarment('back'));
 
       document.getElementById('logoutBtn').addEventListener('click', () => {
         if (roomId) { FVSocket.leaveRoom(roomId); FVWebRTC.closeConnection(); }
@@ -296,46 +300,40 @@
       });
     }
 
-    async function captureGarment() {
+    async function captureGarment(side) {
       const video = document.getElementById('localVideo');
-      const btn = document.getElementById('captureBtn');
+      const btn = document.getElementById(side === 'front' ? 'captureFrontBtn' : 'captureBackBtn');
+      const origText = btn.textContent;
       btn.disabled = true; btn.textContent = '⏳';
-      toast('Capturing garment...', '');
+      toast(`Capturing ${side} side...`, '');
 
       try {
-        // Step 1: Remove background (returns PNG with transparency)
         const rawDataUrl = await FVAI.removeBackground(video);
-
-        // Step 2: Auto-crop to isolate just the garment
-        // Uses pose detection to crop shoulder-to-hip region,
-        // then trims remaining transparent pixels for a clean cutout
         toast('Cropping garment...', '');
         const croppedDataUrl = await FVAI.autoCropGarment(rawDataUrl, video);
 
         garmentCount++;
-        const name = `Garment ${garmentCount}`;
+        const name = `Garment ${garmentCount} (${side})`;
 
-        // Add thumbnail
         document.getElementById('noCapMsg')?.remove();
         const img = document.createElement('img');
         img.src = croppedDataUrl; img.alt = name; img.title = name;
+        img.style.border = side === 'front' ? '2px solid #4CAF50' : '2px solid #FF9800';
         document.getElementById('thumbStrip').appendChild(img);
         document.getElementById('capCount').textContent = garmentCount;
         document.getElementById('statGarments').textContent = garmentCount;
 
-        // Send to buyer — MUST use PNG to preserve transparency!
-        // JPEG destroys alpha channel, making garment a rectangle
         if (roomId) {
-          FVSocket.sendGarmentCaptured(roomId, croppedDataUrl, name);
+          FVSocket.sendGarmentCaptured(roomId, croppedDataUrl, name, side);
         }
 
-        toast(`${name} captured & cropped!`, 'success');
+        toast(`${side.charAt(0).toUpperCase() + side.slice(1)} captured!`, 'success');
       } catch (e) {
         console.error('Capture error:', e);
         toast('Capture failed', 'error');
       }
 
-      btn.disabled = false; btn.textContent = '📸';
+      btn.disabled = false; btn.textContent = origText;
     }
 
     function updateDuration() {

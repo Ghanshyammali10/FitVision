@@ -175,8 +175,9 @@
     let cameraOn = true;
     let arEnabled = true;
     let selectedGarment = null;
-    let selectedGarmentImg = null;
-    let garments = [];
+    let selectedGarmentImg = null;      // Front side image
+    let selectedBackGarmentImg = null;  // Back side image (optional)
+    let garments = [];                  // { name, frontDataUrl, backDataUrl }
     let wishlist = [];
     let poseLoopId = null;
     let mannequinLoopId = null;
@@ -357,10 +358,38 @@
       });
     }
 
-    // ── Garments ──
+    // ── Garments (Front/Back Support) ──
     function addGarment(data) {
-      const { garmentDataUrl, garmentName, timestamp } = data;
-      garments.push({ dataUrl: garmentDataUrl, name: garmentName, timestamp });
+      const { garmentDataUrl, garmentName, timestamp, side } = data;
+      const garmentSide = side || 'front';
+
+      // Try to find an existing garment with same base name to pair front+back
+      // Base name: strip " (front)" or " (back)" suffix
+      const baseName = garmentName.replace(/ \((front|back)\)$/i, '');
+      let existing = garments.find(g => g.baseName === baseName);
+
+      if (existing) {
+        // Update the existing garment with the new side
+        if (garmentSide === 'front') existing.frontDataUrl = garmentDataUrl;
+        else existing.backDataUrl = garmentDataUrl;
+        toast(`${garmentSide} side added to ${baseName}!`, 'success');
+
+        // If this garment is currently selected, reload the new side
+        if (selectedGarment && selectedGarment.baseName === baseName) {
+          loadGarmentSide(garmentDataUrl, garmentSide);
+        }
+        return;
+      }
+
+      // New garment
+      const garment = {
+        baseName,
+        name: garmentName,
+        frontDataUrl: garmentSide === 'front' ? garmentDataUrl : null,
+        backDataUrl: garmentSide === 'back' ? garmentDataUrl : null,
+        timestamp
+      };
+      garments.push(garment);
 
       document.getElementById('noGarmentsMsg')?.classList.add('hidden');
       document.getElementById('garmentBadge').textContent = garments.length;
@@ -370,13 +399,16 @@
       card.className = 'garment-grid-card';
       card.innerHTML = `
         <img src="${garmentDataUrl}" alt="${garmentName}">
+        <div style="position:absolute;top:4px;right:4px;">
+          <span style="background:${garmentSide === 'front' ? '#4CAF50' : '#FF9800'};color:#fff;padding:1px 6px;border-radius:8px;font-size:0.6rem;">${garmentSide}</span>
+        </div>
         <div class="garment-actions">
           <button class="btn btn-primary btn-sm tryon-btn">Try On</button>
           <button class="btn btn-ghost btn-sm wishlist-btn">💝</button>
         </div>
       `;
 
-      card.querySelector('.tryon-btn').addEventListener('click', () => selectGarment(garmentDataUrl, garmentName));
+      card.querySelector('.tryon-btn').addEventListener('click', () => selectGarment(garment));
       card.querySelector('.wishlist-btn').addEventListener('click', () => {
         addToWishlist(garmentDataUrl, garmentName);
         toast(`${garmentName} added to wishlist!`, 'success');
@@ -385,17 +417,51 @@
       grid.appendChild(card);
     }
 
-    function selectGarment(dataUrl, name) {
+    function loadGarmentSide(dataUrl, side) {
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.onload = () => {
-        selectedGarmentImg = img;
-        selectedGarment = { dataUrl, name };
-        document.getElementById('currentGarmentLabel').textContent = `Trying on: ${name}`;
-        if (arEnabled) startPoseLoop();
-        toast(`AR Try-on: ${name}`, 'success');
+        if (side === 'front') selectedGarmentImg = img;
+        else selectedBackGarmentImg = img;
       };
       img.src = dataUrl;
+    }
+
+    function selectGarment(garment) {
+      selectedGarment = garment;
+      selectedBackGarmentImg = null; // Reset
+
+      const frontUrl = garment.frontDataUrl;
+      const backUrl = garment.backDataUrl;
+      const displayName = garment.baseName || garment.name;
+
+      // Load front image
+      const loadFront = frontUrl ? new Promise(resolve => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => { selectedGarmentImg = img; resolve(); };
+        img.onerror = resolve;
+        img.src = frontUrl;
+      }) : Promise.resolve();
+
+      // Load back image
+      const loadBack = backUrl ? new Promise(resolve => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => { selectedBackGarmentImg = img; resolve(); };
+        img.onerror = resolve;
+        img.src = backUrl;
+      }) : Promise.resolve();
+
+      Promise.all([loadFront, loadBack]).then(() => {
+        const sides = [];
+        if (frontUrl) sides.push('front');
+        if (backUrl) sides.push('back');
+        const label = sides.length === 2 ? 'front + back' : sides[0] || 'front';
+        document.getElementById('currentGarmentLabel').textContent = `Trying on: ${displayName} (${label})`;
+        if (arEnabled) startPoseLoop();
+        toast(`AR Try-on: ${displayName}`, 'success');
+      });
     }
 
     // ── AR Pose Loop ──
@@ -408,8 +474,8 @@
       async function loop() {
         if (!arEnabled || !selectedGarmentImg) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
         const keypoints = await FVAI.getPose(video);
-        // Always call drawAROverlay — it handles null keypoints with graceful fade
-        FVAI.drawAROverlay(ctx, canvas.width, canvas.height, selectedGarmentImg, keypoints, video);
+        // Pass both front and back garment images — drawAROverlay auto-switches
+        FVAI.drawAROverlay(ctx, canvas.width, canvas.height, selectedGarmentImg, keypoints, video, selectedBackGarmentImg);
         poseLoopId = requestAnimationFrame(loop);
       }
       loop();
