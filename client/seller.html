@@ -9,6 +9,7 @@
   <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.1/dist/body-segmentation.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.js"></script>
   <style>
     .seller-main { padding: 16px; max-width: 500px; margin: 0 auto; padding-top: 70px; }
     .room-box { text-align: center; margin-bottom: 16px; }
@@ -302,34 +303,33 @@
       toast('Capturing garment...', '');
 
       try {
-        const dataUrl = await FVAI.removeBackground(video);
+        // Step 1: Remove background (returns PNG with transparency)
+        const rawDataUrl = await FVAI.removeBackground(video);
+
+        // Step 2: Auto-crop to isolate just the garment
+        // Uses pose detection to crop shoulder-to-hip region,
+        // then trims remaining transparent pixels for a clean cutout
+        toast('Cropping garment...', '');
+        const croppedDataUrl = await FVAI.autoCropGarment(rawDataUrl, video);
+
         garmentCount++;
         const name = `Garment ${garmentCount}`;
 
         // Add thumbnail
         document.getElementById('noCapMsg')?.remove();
         const img = document.createElement('img');
-        img.src = dataUrl; img.alt = name; img.title = name;
+        img.src = croppedDataUrl; img.alt = name; img.title = name;
         document.getElementById('thumbStrip').appendChild(img);
         document.getElementById('capCount').textContent = garmentCount;
         document.getElementById('statGarments').textContent = garmentCount;
 
-        // Send to buyer
+        // Send to buyer — MUST use PNG to preserve transparency!
+        // JPEG destroys alpha channel, making garment a rectangle
         if (roomId) {
-          // Compress to JPEG 0.8 for transfer
-          const compCanvas = document.createElement('canvas');
-          const compImg = new Image();
-          compImg.onload = () => {
-            compCanvas.width = compImg.width;
-            compCanvas.height = compImg.height;
-            compCanvas.getContext('2d').drawImage(compImg, 0, 0);
-            const compressed = compCanvas.toDataURL('image/jpeg', 0.8);
-            FVSocket.sendGarmentCaptured(roomId, compressed, name);
-          };
-          compImg.src = dataUrl;
+          FVSocket.sendGarmentCaptured(roomId, croppedDataUrl, name);
         }
 
-        toast(`${name} captured!`, 'success');
+        toast(`${name} captured & cropped!`, 'success');
       } catch (e) {
         console.error('Capture error:', e);
         toast('Capture failed', 'error');
