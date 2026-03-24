@@ -1,998 +1,1093 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>FitVision — Live Demo</title>
-  <meta name="description" content="FitVision Split-Screen Demo: Garment capture + AR try-on on a single device.">
-  <link rel="stylesheet" href="css/style.css">
-  <!-- MediaPipe Vision (loaded dynamically in ai.js via ES module import) -->
-  <!-- No external script tags needed! -->
-  <style>
-    /* ── Demo Layout ── */
-    .demo-page {
-      display: flex;
-      width: 100vw;
-      height: 100vh;
-      overflow: hidden;
-    }
-
-    .demo-panel {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-      overflow-y: auto;
-      padding: 20px;
-    }
-
-    /* ── Divider ── */
-    .demo-divider {
-      width: 2px;
-      background: linear-gradient(
-        180deg,
-        transparent 0%,
-        var(--accent) 15%,
-        var(--accent) 85%,
-        transparent 100%
-      );
-      box-shadow: 0 0 12px var(--accent-glow), 0 0 24px var(--accent-glow);
-      flex-shrink: 0;
-      position: relative;
-    }
-    .demo-divider::before {
-      content: '';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 8px;
-      height: 8px;
-      background: var(--accent);
-      border-radius: 50%;
-      box-shadow: 0 0 16px var(--accent);
-    }
-
-    /* ── Panel Headers ── */
-    .panel-header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 16px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--border);
-    }
-    .panel-header h2 {
-      font-family: var(--font-display);
-      font-weight: 700;
-      font-size: 1.1rem;
-      letter-spacing: 0.5px;
-    }
-    .panel-header .panel-icon {
-      font-size: 1.4rem;
-    }
-    .panel-header .panel-badge {
-      margin-left: auto;
-      font-size: 0.65rem;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-    .badge-seller {
-      background: rgba(52, 211, 153, 0.15);
-      color: var(--success);
-    }
-    .badge-buyer {
-      background: rgba(124, 111, 247, 0.15);
-      color: var(--accent);
-    }
-
-    /* ── Video Sections ── */
-    .demo-video-wrap {
-      position: relative;
-      width: 100%;
-      flex: 1;
-      min-height: 250px;
-      max-height: 60vh;
-      border-radius: var(--radius-lg);
-      overflow: hidden;
-      background: #000;
-      margin-bottom: 14px;
-    }
-    .demo-video-wrap video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-
-    /* AR wrapper */
-    .ar-video-wrap {
-      position: relative;
-      width: 100%;
-      flex: 1;
-      min-height: 250px;
-      max-height: 60vh;
-      border-radius: var(--radius-lg);
-      overflow: hidden;
-      background: #000;
-      margin-bottom: 14px;
-    }
-    .ar-video-wrap video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      transform: scaleX(-1);
-    }
-    .ar-video-wrap canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      pointer-events: none;
-      transform: scaleX(-1);
-    }
-
-    /* ── Capture Button ── */
-    .capture-btn {
-      width: 100%;
-      padding: 14px 24px;
-      font-size: 1rem;
-      font-weight: 700;
-      font-family: var(--font-display);
-      background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
-      color: #fff;
-      border: none;
-      border-radius: var(--radius-md);
-      cursor: pointer;
-      transition: all 0.3s;
-      letter-spacing: 0.5px;
-      position: relative;
-      overflow: hidden;
-    }
-    .capture-btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 24px var(--accent-glow);
-    }
-    .capture-btn:active {
-      transform: translateY(0);
-    }
-    .capture-btn:disabled {
-      opacity: 0.5;
-      pointer-events: none;
-    }
-    .capture-btn .btn-shimmer {
-      position: absolute;
-      top: 0; left: -100%; width: 100%; height: 100%;
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
-      animation: shimmer 2.5s infinite;
-    }
-    @keyframes shimmer {
-      to { left: 100%; }
-    }
-
-    /* ── Capture Steps Indicator ── */
-    .capture-steps {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      margin-top: 8px;
-      padding: 6px;
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-    .capture-steps.visible { opacity: 1; }
-    .capture-step {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 0.68rem;
-      color: var(--muted);
-      padding: 3px 10px;
-      border-radius: 8px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      transition: all 0.3s;
-    }
-    .capture-step.active {
-      color: var(--accent);
-      border-color: var(--accent);
-      background: rgba(124, 111, 247, 0.08);
-    }
-    .capture-step.done {
-      color: var(--success);
-      border-color: var(--success);
-      background: rgba(52, 211, 153, 0.08);
-    }
-    .step-arrow {
-      color: var(--muted);
-      font-size: 0.7rem;
-    }
-
-    /* ── Countdown Overlay ── */
-    .countdown-overlay {
-      position: absolute;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(4px);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      z-index: 10;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.3s;
-    }
-    .countdown-overlay.active {
-      opacity: 1;
-      pointer-events: all;
-    }
-    .countdown-number {
-      font-family: var(--font-display);
-      font-size: 5rem;
-      font-weight: 800;
-      color: #fff;
-      text-shadow: 0 0 40px var(--accent), 0 0 80px rgba(124, 111, 247, 0.4);
-      animation: countdown-pop 1s ease-in-out infinite;
-    }
-    @keyframes countdown-pop {
-      0%, 100% { transform: scale(1); }
-      50% { transform: scale(1.15); }
-    }
-    .countdown-label {
-      font-size: 0.9rem;
-      color: rgba(255, 255, 255, 0.8);
-      margin-top: 8px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 2px;
-    }
-    .countdown-sublabel {
-      font-size: 0.75rem;
-      color: rgba(255, 255, 255, 0.5);
-      margin-top: 4px;
-    }
-
-    /* ── Thumbnails ── */
-    .thumb-strip {
-      display: flex;
-      gap: 8px;
-      overflow-x: auto;
-      padding: 8px 0;
-      min-height: 60px;
-      align-items: center;
-    }
-    .thumb-strip:empty::after {
-      content: 'Captured garments appear here';
-      color: var(--muted);
-      font-size: 0.75rem;
-      padding: 10px;
-    }
-    .thumb-item {
-      width: 60px;
-      height: 60px;
-      border-radius: var(--radius-sm);
-      overflow: hidden;
-      border: 2px solid var(--border);
-      flex-shrink: 0;
-      cursor: pointer;
-      transition: all 0.2s;
-      position: relative;
-    }
-    .thumb-item:hover {
-      border-color: var(--accent);
-      transform: scale(1.08);
-    }
-    .thumb-item.active {
-      border-color: var(--accent);
-      box-shadow: 0 0 12px var(--accent-glow);
-    }
-    .thumb-item img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-
-    /* ── Garment Gallery (buyer side) ── */
-    .garment-gallery {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-      gap: 8px;
-      margin-top: 8px;
-    }
-    .garment-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      overflow: hidden;
-      cursor: pointer;
-      transition: all 0.2s;
-      text-align: center;
-    }
-    .garment-card:hover {
-      border-color: var(--accent);
-      transform: translateY(-2px);
-    }
-    .garment-card.selected {
-      border-color: var(--accent);
-      box-shadow: 0 0 10px var(--accent-glow);
-    }
-    .garment-card img {
-      width: 100%;
-      height: 80px;
-      object-fit: cover;
-    }
-    .garment-card .gc-label {
-      padding: 4px;
-      font-size: 0.65rem;
-      color: var(--text-dim);
-    }
-    .garment-card .gc-tryon {
-      padding: 4px;
-      font-size: 0.7rem;
-      font-weight: 600;
-      color: var(--accent);
-      cursor: pointer;
-    }
-    .garment-card .gc-tryon:hover {
-      color: #fff;
-    }
-
-    /* ── Instruction text ── */
-    .instruction-text {
-      font-size: 0.75rem;
-      color: var(--muted);
-      text-align: center;
-      padding: 8px;
-      line-height: 1.5;
-    }
-
-    /* ── Current garment label ── */
-    .current-label {
-      text-align: center;
-      font-size: 0.8rem;
-      color: var(--text-dim);
-      padding: 6px 0;
-      font-weight: 500;
-    }
-
-    /* ── No garment placeholder ── */
-    .no-garment-msg {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 24px 16px;
-      color: var(--muted);
-      text-align: center;
-      gap: 6px;
-    }
-    .no-garment-msg .big-icon {
-      font-size: 2rem;
-      opacity: 0.6;
-    }
-
-    /* ── Section label ── */
-    .section-label {
-      font-family: var(--font-display);
-      font-weight: 600;
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 1.5px;
-      color: var(--text-dim);
-      margin: 12px 0 6px;
-    }
-
-    /* ── Status bar ── */
-    .demo-status {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 14px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      margin-bottom: 12px;
-      font-size: 0.8rem;
-    }
-    .demo-status .status-dot {
-      width: 8px;
-      height: 8px;
-    }
-
-    /* ── Top bar ── */
-    .demo-topbar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      z-index: 500;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 24px;
-      background: rgba(10, 10, 15, 0.9);
-      backdrop-filter: blur(16px);
-      border-bottom: 1px solid var(--border);
-    }
-    .demo-topbar .logo {
-      font-size: 1.3rem;
-    }
-    .demo-topbar .demo-badge {
-      background: linear-gradient(135deg, var(--accent), #a78bfa);
-      color: #fff;
-      padding: 4px 14px;
-      border-radius: 20px;
-      font-size: 0.7rem;
-      font-weight: 700;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-    }
-
-    .demo-page {
-      padding-top: 52px;
-    }
-
-    /* ── Responsive ── */
-    @media (max-width: 900px) {
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>FitVision — Live Demo</title>
+    <meta
+      name="description"
+      content="FitVision Split-Screen Demo: Garment capture + AR try-on on a single device."
+    />
+    <link rel="stylesheet" href="css/style.css" />
+    <!-- MediaPipe Vision (loaded dynamically in ai.js via ES module import) -->
+    <!-- No external script tags needed! -->
+    <style>
+      /* ── Demo Layout ── */
       .demo-page {
-        flex-direction: column;
-        height: auto;
-        min-height: 100vh;
+        display: flex;
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
       }
+
       .demo-panel {
-        height: auto;
-        min-height: 50vh;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow-y: auto;
+        padding: 20px;
       }
+
+      /* ── Divider ── */
       .demo-divider {
-        width: 100%;
-        height: 2px;
+        width: 2px;
         background: linear-gradient(
-          90deg,
+          180deg,
           transparent 0%,
           var(--accent) 15%,
           var(--accent) 85%,
           transparent 100%
         );
+        box-shadow: 0 0 12px var(--accent-glow), 0 0 24px var(--accent-glow);
+        flex-shrink: 0;
+        position: relative;
       }
       .demo-divider::before {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 8px;
+        height: 8px;
+        background: var(--accent);
+        border-radius: 50%;
+        box-shadow: 0 0 16px var(--accent);
+      }
+
+      /* ── Panel Headers ── */
+      .panel-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .panel-header h2 {
+        font-family: var(--font-display);
+        font-weight: 700;
+        font-size: 1.1rem;
+        letter-spacing: 0.5px;
+      }
+      .panel-header .panel-icon {
+        font-size: 1.4rem;
+      }
+      .panel-header .panel-badge {
+        margin-left: auto;
+        font-size: 0.65rem;
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .badge-seller {
+        background: rgba(52, 211, 153, 0.15);
+        color: var(--success);
+      }
+      .badge-buyer {
+        background: rgba(124, 111, 247, 0.15);
+        color: var(--accent);
+      }
+
+      /* ── Video Sections ── */
+      .demo-video-wrap {
+        position: relative;
+        width: 100%;
+        flex: 1;
+        min-height: 250px;
+        max-height: 60vh;
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        background: #000;
+        margin-bottom: 14px;
+      }
+      .demo-video-wrap video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      /* AR wrapper */
+      .ar-video-wrap {
+        position: relative;
+        width: 100%;
+        flex: 1;
+        min-height: 250px;
+        max-height: 60vh;
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        background: #000;
+        margin-bottom: 14px;
+      }
+      .ar-video-wrap video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scaleX(-1);
+      }
+      .ar-video-wrap canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        pointer-events: none;
+        transform: scaleX(-1);
+      }
+
+      /* ── Capture Button ── */
+      .capture-btn {
+        width: 100%;
+        padding: 14px 24px;
+        font-size: 1rem;
+        font-weight: 700;
+        font-family: var(--font-display);
+        background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
+        color: #fff;
+        border: none;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition: all 0.3s;
+        letter-spacing: 0.5px;
+        position: relative;
+        overflow: hidden;
+      }
+      .capture-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 24px var(--accent-glow);
+      }
+      .capture-btn:active {
+        transform: translateY(0);
+      }
+      .capture-btn:disabled {
+        opacity: 0.5;
+        pointer-events: none;
+      }
+      .capture-btn .btn-shimmer {
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(255, 255, 255, 0.15),
+          transparent
+        );
+        animation: shimmer 2.5s infinite;
+      }
+      @keyframes shimmer {
+        to {
+          left: 100%;
+        }
+      }
+
+      /* ── Capture Steps Indicator ── */
+      .capture-steps {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        margin-top: 8px;
+        padding: 6px;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      .capture-steps.visible {
+        opacity: 1;
+      }
+      .capture-step {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.68rem;
+        color: var(--muted);
+        padding: 3px 10px;
+        border-radius: 8px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        transition: all 0.3s;
+      }
+      .capture-step.active {
+        color: var(--accent);
+        border-color: var(--accent);
+        background: rgba(124, 111, 247, 0.08);
+      }
+      .capture-step.done {
+        color: var(--success);
+        border-color: var(--success);
+        background: rgba(52, 211, 153, 0.08);
+      }
+      .step-arrow {
+        color: var(--muted);
+        font-size: 0.7rem;
+      }
+
+      /* ── Countdown Overlay ── */
+      .countdown-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(4px);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 10;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s;
+      }
+      .countdown-overlay.active {
+        opacity: 1;
+        pointer-events: all;
+      }
+      .countdown-number {
+        font-family: var(--font-display);
+        font-size: 5rem;
+        font-weight: 800;
+        color: #fff;
+        text-shadow: 0 0 40px var(--accent), 0 0 80px rgba(124, 111, 247, 0.4);
+        animation: countdown-pop 1s ease-in-out infinite;
+      }
+      @keyframes countdown-pop {
+        0%,
+        100% {
+          transform: scale(1);
+        }
+        50% {
+          transform: scale(1.15);
+        }
+      }
+      .countdown-label {
+        font-size: 0.9rem;
+        color: rgba(255, 255, 255, 0.8);
+        margin-top: 8px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+      }
+      .countdown-sublabel {
+        font-size: 0.75rem;
+        color: rgba(255, 255, 255, 0.5);
+        margin-top: 4px;
+      }
+
+      /* ── Thumbnails ── */
+      .thumb-strip {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding: 8px 0;
+        min-height: 60px;
+        align-items: center;
+      }
+      .thumb-strip:empty::after {
+        content: "Captured garments appear here";
+        color: var(--muted);
+        font-size: 0.75rem;
+        padding: 10px;
+      }
+      .thumb-item {
+        width: 60px;
+        height: 60px;
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+        border: 2px solid var(--border);
+        flex-shrink: 0;
+        cursor: pointer;
+        transition: all 0.2s;
+        position: relative;
+      }
+      .thumb-item:hover {
+        border-color: var(--accent);
+        transform: scale(1.08);
+      }
+      .thumb-item.active {
+        border-color: var(--accent);
+        box-shadow: 0 0 12px var(--accent-glow);
+      }
+      .thumb-item img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      /* ── Garment Gallery (buyer side) ── */
+      .garment-gallery {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .garment-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-align: center;
+      }
+      .garment-card:hover {
+        border-color: var(--accent);
+        transform: translateY(-2px);
+      }
+      .garment-card.selected {
+        border-color: var(--accent);
+        box-shadow: 0 0 10px var(--accent-glow);
+      }
+      .garment-card img {
+        width: 100%;
+        height: 80px;
+        object-fit: cover;
+      }
+      .garment-card .gc-label {
+        padding: 4px;
+        font-size: 0.65rem;
+        color: var(--text-dim);
+      }
+      .garment-card .gc-tryon {
+        padding: 4px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: var(--accent);
+        cursor: pointer;
+      }
+      .garment-card .gc-tryon:hover {
+        color: #fff;
+      }
+
+      /* ── Instruction text ── */
+      .instruction-text {
+        font-size: 0.75rem;
+        color: var(--muted);
+        text-align: center;
+        padding: 8px;
+        line-height: 1.5;
+      }
+
+      /* ── Current garment label ── */
+      .current-label {
+        text-align: center;
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        padding: 6px 0;
+        font-weight: 500;
+      }
+
+      /* ── No garment placeholder ── */
+      .no-garment-msg {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px 16px;
+        color: var(--muted);
+        text-align: center;
+        gap: 6px;
+      }
+      .no-garment-msg .big-icon {
+        font-size: 2rem;
+        opacity: 0.6;
+      }
+
+      /* ── Section label ── */
+      .section-label {
+        font-family: var(--font-display);
+        font-weight: 600;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        color: var(--text-dim);
+        margin: 12px 0 6px;
+      }
+
+      /* ── Status bar ── */
+      .demo-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        margin-bottom: 12px;
+        font-size: 0.8rem;
+      }
+      .demo-status .status-dot {
         width: 8px;
         height: 8px;
       }
-    }
-  </style>
-</head>
-<body>
-  <!-- Loading Overlay -->
-  <div class="loading-overlay" id="loadingOverlay">
-    <div class="logo logo-lg">FitVision</div>
-    <div class="spinner spinner-lg"></div>
-    <div class="loading-text" id="loadingText">Initializing AI models...</div>
-    <div class="loading-progress">
-      <div class="loading-progress-bar" id="progressBar" style="width:0%"></div>
-    </div>
-  </div>
 
-  <!-- Top Bar -->
-  <div class="demo-topbar">
-    <div style="display:flex;align-items:center;gap:10px;">
-      <span class="logo">FitVision</span>
-      <span class="demo-badge">Live Demo</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <span class="status-dot live" id="cameraDot"></span>
-      <span style="font-size:0.8rem;color:var(--text-dim);" id="cameraStatusText">Camera ready</span>
-    </div>
-  </div>
-
-  <!-- Split Screen -->
-  <div class="demo-page">
-
-    <!-- ═══ LEFT: SELLER PANEL ═══ -->
-    <div class="demo-panel" id="sellerPanel">
-      <div class="panel-header">
-        <span class="panel-icon">👔</span>
-        <h2>Seller View</h2>
-        <span class="panel-badge badge-seller">Capture</span>
-      </div>
-
-      <!-- Seller Video -->
-      <div class="demo-video-wrap">
-        <video id="sellerVideo" autoplay playsinline muted></video>
-        <!-- Countdown Overlay -->
-        <div class="countdown-overlay" id="countdownOverlay">
-          <div class="countdown-number" id="countdownNumber">6</div>
-          <div class="countdown-label" id="countdownSide">Front Side</div>
-          <div class="countdown-sublabel" id="countdownHint">Hold the garment steady</div>
-        </div>
-      </div>
-
-      <!-- Capture Button -->
-      <button class="capture-btn" id="captureBtn" disabled>
-        <span class="btn-shimmer"></span>
-        📸 Capture Garment
-      </button>
-
-      <!-- Capture Steps -->
-      <div class="capture-steps" id="captureSteps">
-        <div class="capture-step" id="stepFront">
-          <span>👕</span>
-          <span>Front</span>
-        </div>
-        <span class="step-arrow">→</span>
-        <div class="capture-step" id="stepFlip">
-          <span>🔄</span>
-          <span>Flip</span>
-        </div>
-        <span class="step-arrow">→</span>
-        <div class="capture-step" id="stepBack">
-          <span>👕</span>
-          <span>Back</span>
-        </div>
-      </div>
-
-      <p class="instruction-text" style="margin-top:8px;">
-        Point your camera at a garment and click capture.<br>
-        AI will continuously capture the front, then give you 6 seconds to flip for the back.
-      </p>
-
-      <!-- Thumbnail Strip -->
-      <div class="section-label" style="display:flex;justify-content:space-between;">
-        <span>Captured Products</span>
-        <span class="badge badge-accent" id="captureCount">0</span>
-      </div>
-      <div class="thumb-strip" id="sellerThumbs"></div>
-
-      <!-- Demo Status -->
-      <div class="demo-status" style="margin-top:auto;">
-        <span class="status-dot live"></span>
-        <span>Demo Mode — No server required</span>
-      </div>
-    </div>
-
-    <!-- ═══ DIVIDER ═══ -->
-    <div class="demo-divider"></div>
-
-    <!-- ═══ RIGHT: BUYER PANEL ═══ -->
-    <div class="demo-panel" id="buyerPanel">
-      <div class="panel-header">
-        <span class="panel-icon">🪞</span>
-        <h2>Buyer AR Try-On</h2>
-        <span class="panel-badge badge-buyer">Live AR</span>
-      </div>
-
-      <!-- AR Video + Canvas -->
-      <div class="ar-video-wrap" id="arVideoWrapper">
-        <video id="buyerVideo" autoplay playsinline muted></video>
-        <canvas id="arCanvas"></canvas>
-      </div>
-
-      <!-- Current Garment Label -->
-      <div class="current-label" id="currentGarmentLabel">
-        No garment selected
-      </div>
-
-      <!-- Garment Gallery -->
-      <div class="section-label" style="display:flex;justify-content:space-between;">
-        <span>Available Garments</span>
-        <span class="badge badge-accent" id="garmentCount">0</span>
-      </div>
-      <div id="buyerGarmentArea">
-        <div class="no-garment-msg" id="noGarmentMsg">
-          <span class="big-icon">👕</span>
-          <span>Capture a garment on the Seller side first</span>
-          <span style="font-size:0.7rem;">The garment will instantly appear here for AR try-on</span>
-        </div>
-        <div class="garment-gallery" id="garmentGallery"></div>
-      </div>
-
-      <!-- AR Controls -->
-      <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">
-        <button class="control-btn active" id="arToggleBtn" title="Toggle AR">👕</button>
-        <button class="control-btn" id="screenshotBtn" title="Screenshot">📸</button>
-      </div>
-
-      <div class="demo-status" style="margin-top:auto;">
-        <span class="status-dot live"></span>
-        <span>AR overlay active — pose tracking enabled</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- Toast -->
-  <div class="toast-container" id="toastContainer"></div>
-
-  <!-- AI Module (no socket/webrtc) -->
-  <script src="js/ai.js"></script>
-
-  <script>
-    // ══════════════════════════════════════════
-    // FitVision — Split-Screen Demo (No Sockets)
-    // ══════════════════════════════════════════
-
-    // ── Shared State ──
-    let localStream = null;
-    let garmentCount = 0;
-    let garments = [];              // { id, name, dataUrl, imgObj }
-    let currentGarmentImage = null; // Image object for AR overlay
-    let currentBackGarmentImg = null;
-    let selectedGarmentId = null;
-    let arEnabled = true;
-    let poseLoopId = null;
-    let isCapturing = false;
-
-    // ── Init ──
-    async function init() {
-      try {
-        // Load AI models
-        await FVAI.loadModels((p) => {
-          document.getElementById('loadingText').textContent = `${p.model}: ${p.status}`;
-          document.getElementById('progressBar').style.width = p.percent + '%';
-        });
-
-        document.getElementById('loadingOverlay').classList.add('hidden');
-        setupUI();
-        await startCamera();
-        toast('Demo ready! Capture a garment to begin.', 'success');
-      } catch (e) {
-        console.error('Init error:', e);
-        document.getElementById('loadingText').textContent = 'Error loading models. Refresh to retry.';
+      /* ── Top bar ── */
+      .demo-topbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 500;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 24px;
+        background: rgba(10, 10, 15, 0.9);
+        backdrop-filter: blur(16px);
+        border-bottom: 1px solid var(--border);
       }
-    }
-
-    // ── Camera ──
-    async function startCamera() {
-      try {
-        localStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-        });
-
-        // Feed SAME stream to both video elements
-        const sellerVideo = document.getElementById('sellerVideo');
-        const buyerVideo = document.getElementById('buyerVideo');
-
-        sellerVideo.srcObject = localStream;
-        buyerVideo.srcObject = localStream;
-
-        // Set up AR canvas dimensions once buyer video is ready
-        buyerVideo.addEventListener('loadedmetadata', () => {
-          const canvas = document.getElementById('arCanvas');
-          canvas.width = buyerVideo.videoWidth;
-          canvas.height = buyerVideo.videoHeight;
-        });
-
-        document.getElementById('captureBtn').disabled = false;
-        document.getElementById('cameraStatusText').textContent = 'Camera active';
-      } catch (e) {
-        console.error('Camera error:', e);
-        toast('Camera not available — using demo mode', 'error');
-        startDemoMode();
+      .demo-topbar .logo {
+        font-size: 1.3rem;
       }
-    }
-
-    function startDemoMode() {
-      const c = document.createElement('canvas');
-      c.width = 640; c.height = 480;
-      const ctx = c.getContext('2d');
-
-      function draw() {
-        ctx.fillStyle = '#1a1a2e';
-        ctx.fillRect(0, 0, 640, 480);
-        ctx.fillStyle = '#7c6ff7';
-        ctx.font = '20px Syne, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('📷 Demo Mode', 320, 220);
-        ctx.fillStyle = '#888';
-        ctx.font = '13px DM Sans, sans-serif';
-        ctx.fillText('Camera not available', 320, 250);
+      .demo-topbar .demo-badge {
+        background: linear-gradient(135deg, var(--accent), #a78bfa);
+        color: #fff;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 1px;
+        text-transform: uppercase;
       }
-      draw();
-      setInterval(draw, 300);
 
-      localStream = c.captureStream(10);
-      document.getElementById('sellerVideo').srcObject = localStream;
-      document.getElementById('buyerVideo').srcObject = localStream;
-      document.getElementById('captureBtn').disabled = false;
-      document.getElementById('cameraStatusText').textContent = 'Demo mode';
-      document.getElementById('cameraDot').classList.remove('live');
-      document.getElementById('cameraDot').classList.add('error');
+      .demo-page {
+        padding-top: 52px;
+      }
 
-      const arCanvas = document.getElementById('arCanvas');
-      arCanvas.width = 640;
-      arCanvas.height = 480;
-    }
+      /* ── Responsive ── */
+      @media (max-width: 900px) {
+        .demo-page {
+          flex-direction: column;
+          height: auto;
+          min-height: 100vh;
+        }
+        .demo-panel {
+          height: auto;
+          min-height: 50vh;
+        }
+        .demo-divider {
+          width: 100%;
+          height: 2px;
+          background: linear-gradient(
+            90deg,
+            transparent 0%,
+            var(--accent) 15%,
+            var(--accent) 85%,
+            transparent 100%
+          );
+        }
+        .demo-divider::before {
+          width: 8px;
+          height: 8px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+      <div class="logo logo-lg">FitVision</div>
+      <div class="spinner spinner-lg"></div>
+      <div class="loading-text" id="loadingText">Initializing AI models...</div>
+      <div class="loading-progress">
+        <div
+          class="loading-progress-bar"
+          id="progressBar"
+          style="width: 0%"
+        ></div>
+      </div>
+    </div>
 
-    // ── UI Setup ──
-    function setupUI() {
-      document.getElementById('captureBtn').addEventListener('click', startDualCapture);
-      document.getElementById('arToggleBtn').addEventListener('click', toggleAR);
-      document.getElementById('screenshotBtn').addEventListener('click', takeScreenshot);
-    }
+    <!-- Top Bar -->
+    <div class="demo-topbar">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <span class="logo">FitVision</span>
+        <span class="demo-badge">Live Demo</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px">
+        <span class="status-dot live" id="cameraDot"></span>
+        <span
+          style="font-size: 0.8rem; color: var(--text-dim)"
+          id="cameraStatusText"
+          >Camera ready</span
+        >
+      </div>
+    </div>
 
-    // ══════════════════════════════════════════
-    // DUAL CAPTURE — Front + 6s countdown + Back
-    // ══════════════════════════════════════════
+    <!-- Split Screen -->
+    <div class="demo-page">
+      <!-- ═══ LEFT: SELLER PANEL ═══ -->
+      <div class="demo-panel" id="sellerPanel">
+        <div class="panel-header">
+          <span class="panel-icon">👔</span>
+          <h2>Seller View</h2>
+          <span class="panel-badge badge-seller">Capture</span>
+        </div>
 
-    function showCountdown(seconds, side, hint) {
-      return new Promise((resolve) => {
-        const overlay = document.getElementById('countdownOverlay');
-        const numEl = document.getElementById('countdownNumber');
-        const sideEl = document.getElementById('countdownSide');
-        const hintEl = document.getElementById('countdownHint');
+        <!-- Seller Video -->
+        <div class="demo-video-wrap">
+          <video id="sellerVideo" autoplay playsinline muted></video>
+          <!-- Countdown Overlay -->
+          <div class="countdown-overlay" id="countdownOverlay">
+            <div class="countdown-number" id="countdownNumber">6</div>
+            <div class="countdown-label" id="countdownSide">Front Side</div>
+            <div class="countdown-sublabel" id="countdownHint">
+              Hold the garment steady
+            </div>
+          </div>
+        </div>
 
-        sideEl.textContent = side;
-        hintEl.textContent = hint;
-        numEl.textContent = seconds;
-        overlay.classList.add('active');
+        <!-- Capture Button -->
+        <button class="capture-btn" id="captureBtn" disabled>
+          <span class="btn-shimmer"></span>
+          📸 Capture Garment
+        </button>
 
-        let remaining = seconds;
-        const interval = setInterval(() => {
-          remaining--;
-          if (remaining <= 0) {
-            clearInterval(interval);
-            overlay.classList.remove('active');
-            resolve();
-          } else {
-            numEl.textContent = remaining;
+        <!-- Capture Steps -->
+        <div class="capture-steps" id="captureSteps">
+          <div class="capture-step" id="stepFront">
+            <span>👕</span>
+            <span>Front</span>
+          </div>
+          <span class="step-arrow">→</span>
+          <div class="capture-step" id="stepFlip">
+            <span>🔄</span>
+            <span>Flip</span>
+          </div>
+          <span class="step-arrow">→</span>
+          <div class="capture-step" id="stepBack">
+            <span>👕</span>
+            <span>Back</span>
+          </div>
+        </div>
+
+        <p class="instruction-text" style="margin-top: 8px">
+          Point your camera at a garment and click capture.<br />
+          AI will continuously capture the front, then give you 6 seconds to
+          flip for the back.
+        </p>
+
+        <!-- Thumbnail Strip -->
+        <div
+          class="section-label"
+          style="display: flex; justify-content: space-between"
+        >
+          <span>Captured Products</span>
+          <span class="badge badge-accent" id="captureCount">0</span>
+        </div>
+        <div class="thumb-strip" id="sellerThumbs"></div>
+
+        <!-- Demo Status -->
+        <div class="demo-status" style="margin-top: auto">
+          <span class="status-dot live"></span>
+          <span>Demo Mode — No server required</span>
+        </div>
+      </div>
+
+      <!-- ═══ DIVIDER ═══ -->
+      <div class="demo-divider"></div>
+
+      <!-- ═══ RIGHT: BUYER PANEL ═══ -->
+      <div class="demo-panel" id="buyerPanel">
+        <div class="panel-header">
+          <span class="panel-icon">🪞</span>
+          <h2>Buyer AR Try-On</h2>
+          <span class="panel-badge badge-buyer">Live AR</span>
+        </div>
+
+        <!-- AR Video + Canvas -->
+        <div class="ar-video-wrap" id="arVideoWrapper">
+          <video id="buyerVideo" autoplay playsinline muted></video>
+          <canvas id="arCanvas"></canvas>
+        </div>
+
+        <!-- Current Garment Label -->
+        <div class="current-label" id="currentGarmentLabel">
+          No garment selected
+        </div>
+
+        <!-- Garment Gallery -->
+        <div
+          class="section-label"
+          style="display: flex; justify-content: space-between"
+        >
+          <span>Available Garments</span>
+          <span class="badge badge-accent" id="garmentCount">0</span>
+        </div>
+        <div id="buyerGarmentArea">
+          <div class="no-garment-msg" id="noGarmentMsg">
+            <span class="big-icon">👕</span>
+            <span>Capture a garment on the Seller side first</span>
+            <span style="font-size: 0.7rem"
+              >The garment will instantly appear here for AR try-on</span
+            >
+          </div>
+          <div class="garment-gallery" id="garmentGallery"></div>
+        </div>
+
+        <!-- AR Controls -->
+        <div
+          style="
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            margin-top: 12px;
+          "
+        >
+          <button class="control-btn active" id="arToggleBtn" title="Toggle AR">
+            👕
+          </button>
+          <button class="control-btn" id="screenshotBtn" title="Screenshot">
+            📸
+          </button>
+        </div>
+
+        <div class="demo-status" style="margin-top: auto">
+          <span class="status-dot live"></span>
+          <span>AR overlay active — pose tracking enabled</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- AI Module (no socket/webrtc) -->
+    <script src="js/ai.js"></script>
+
+    <script>
+      // ══════════════════════════════════════════
+      // FitVision — Split-Screen Demo (No Sockets)
+      // ══════════════════════════════════════════
+
+      // ── Shared State ──
+      let localStream = null;
+      let garmentCount = 0;
+      let garments = []; // { id, name, dataUrl, imgObj }
+      let currentGarmentImage = null; // Image object for AR overlay
+      let currentBackGarmentImg = null;
+      let selectedGarmentId = null;
+      let arEnabled = true;
+      let poseLoopId = null;
+      let isCapturing = false;
+
+      // ── Init ──
+      async function init() {
+        try {
+          // Load AI models
+          await FVAI.loadModels((p) => {
+            document.getElementById(
+              "loadingText"
+            ).textContent = `${p.model}: ${p.status}`;
+            document.getElementById("progressBar").style.width =
+              p.percent + "%";
+          });
+
+          document.getElementById("loadingOverlay").classList.add("hidden");
+          setupUI();
+          await startCamera();
+          toast("Demo ready! Capture a garment to begin.", "success");
+        } catch (e) {
+          console.error("Init error:", e);
+          document.getElementById("loadingText").textContent =
+            "Error loading models. Refresh to retry.";
+        }
+      }
+
+      // ── Camera ──
+      async function startCamera() {
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: "environment",
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+          });
+
+          // Feed SAME stream to both video elements
+          const sellerVideo = document.getElementById("sellerVideo");
+          const buyerVideo = document.getElementById("buyerVideo");
+
+          sellerVideo.srcObject = localStream;
+          buyerVideo.srcObject = localStream;
+
+          // Set up AR canvas dimensions once buyer video is ready
+          buyerVideo.addEventListener("loadedmetadata", () => {
+            const canvas = document.getElementById("arCanvas");
+            canvas.width = buyerVideo.videoWidth;
+            canvas.height = buyerVideo.videoHeight;
+          });
+
+          document.getElementById("captureBtn").disabled = false;
+          document.getElementById("cameraStatusText").textContent =
+            "Camera active";
+        } catch (e) {
+          console.error("Camera error:", e);
+          toast("Camera not available — using demo mode", "error");
+          startDemoMode();
+        }
+      }
+
+      function startDemoMode() {
+        const c = document.createElement("canvas");
+        c.width = 640;
+        c.height = 480;
+        const ctx = c.getContext("2d");
+
+        function draw() {
+          ctx.fillStyle = "#1a1a2e";
+          ctx.fillRect(0, 0, 640, 480);
+          ctx.fillStyle = "#7c6ff7";
+          ctx.font = "20px Syne, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("📷 Demo Mode", 320, 220);
+          ctx.fillStyle = "#888";
+          ctx.font = "13px DM Sans, sans-serif";
+          ctx.fillText("Camera not available", 320, 250);
+        }
+        draw();
+        setInterval(draw, 300);
+
+        localStream = c.captureStream(10);
+        document.getElementById("sellerVideo").srcObject = localStream;
+        document.getElementById("buyerVideo").srcObject = localStream;
+        document.getElementById("captureBtn").disabled = false;
+        document.getElementById("cameraStatusText").textContent = "Demo mode";
+        document.getElementById("cameraDot").classList.remove("live");
+        document.getElementById("cameraDot").classList.add("error");
+
+        const arCanvas = document.getElementById("arCanvas");
+        arCanvas.width = 640;
+        arCanvas.height = 480;
+      }
+
+      // ── UI Setup ──
+      function setupUI() {
+        document
+          .getElementById("captureBtn")
+          .addEventListener("click", startDualCapture);
+        document
+          .getElementById("arToggleBtn")
+          .addEventListener("click", toggleAR);
+        document
+          .getElementById("screenshotBtn")
+          .addEventListener("click", takeScreenshot);
+      }
+
+      // ══════════════════════════════════════════
+      // DUAL CAPTURE — Front + 6s countdown + Back
+      // ══════════════════════════════════════════
+
+      function showCountdown(seconds, side, hint) {
+        return new Promise((resolve) => {
+          const overlay = document.getElementById("countdownOverlay");
+          const numEl = document.getElementById("countdownNumber");
+          const sideEl = document.getElementById("countdownSide");
+          const hintEl = document.getElementById("countdownHint");
+
+          sideEl.textContent = side;
+          hintEl.textContent = hint;
+          numEl.textContent = seconds;
+          overlay.classList.add("active");
+
+          let remaining = seconds;
+          const interval = setInterval(() => {
+            remaining--;
+            if (remaining <= 0) {
+              clearInterval(interval);
+              overlay.classList.remove("active");
+              resolve();
+            } else {
+              numEl.textContent = remaining;
+            }
+          }, 1000);
+        });
+      }
+
+      function setStepState(stepId, state) {
+        const el = document.getElementById(stepId);
+        el.classList.remove("active", "done");
+        if (state) el.classList.add(state);
+      }
+
+      async function captureOneSide(video) {
+        const rawDataUrl = await FVAI.removeBackground(video);
+        const croppedDataUrl = await FVAI.autoCropGarment(rawDataUrl, video);
+        const imgObj = await loadImage(croppedDataUrl);
+        return { dataUrl: croppedDataUrl, imgObj };
+      }
+
+      async function startDualCapture() {
+        if (isCapturing) return;
+        isCapturing = true;
+
+        const btn = document.getElementById("captureBtn");
+        const origText = btn.innerHTML;
+        btn.disabled = true;
+        const stepsEl = document.getElementById("captureSteps");
+        stepsEl.classList.add("visible");
+
+        const video = document.getElementById("sellerVideo");
+
+        try {
+          // ═══ STEP 1: Capture FRONT ═══
+          setStepState("stepFront", "active");
+          setStepState("stepFlip", "");
+          setStepState("stepBack", "");
+
+          btn.innerHTML =
+            '<span class="spinner" style="width:18px;height:18px;border-width:2px;display:inline-block;vertical-align:middle;"></span> Capturing Front...';
+          toast("Capturing front side...", "");
+
+          const front = await captureOneSide(video);
+          setStepState("stepFront", "done");
+
+          // ═══ STEP 2: Countdown to flip (6s delay) ═══
+          setStepState("stepFlip", "active");
+          toast(
+            "🔄 Flip the garment! Capturing back in 6 seconds...",
+            "success"
+          );
+          btn.innerHTML = "🔄 Flip garment now!";
+
+          await showCountdown(
+            6,
+            "🔄 Flip Now!",
+            "Turn the garment to show the back side"
+          );
+
+          // ═══ STEP 3: Capture BACK ═══
+          setStepState("stepFlip", "done");
+          setStepState("stepBack", "active");
+          btn.innerHTML =
+            '<span class="spinner" style="width:18px;height:18px;border-width:2px;display:inline-block;vertical-align:middle;"></span> Capturing Back...';
+          toast("Capturing back side...", "");
+
+          const back = await captureOneSide(video);
+          setStepState("stepBack", "done");
+
+          // ═══ STEP 4: Register garment ═══
+          garmentCount++;
+          const garmentId = "g" + Date.now();
+          const garmentName = `Garment ${garmentCount}`;
+
+          const garment = {
+            id: garmentId,
+            name: garmentName,
+            dataUrl: front.dataUrl,
+            imgObj: front.imgObj,
+            backDataUrl: back.dataUrl,
+            backImgObj: back.imgObj,
+          };
+          garments.push(garment);
+
+          // Update seller thumbnails
+          addSellerThumbnail(garment);
+
+          // Update buyer gallery
+          addBuyerGarmentCard(garment);
+
+          // Auto-select first garment
+          if (garments.length === 1) {
+            selectGarment(garment);
           }
-        }, 1000);
-      });
-    }
 
-    function setStepState(stepId, state) {
-      const el = document.getElementById(stepId);
-      el.classList.remove('active', 'done');
-      if (state) el.classList.add(state);
-    }
+          // Update counters
+          document.getElementById("captureCount").textContent = garmentCount;
+          document.getElementById("garmentCount").textContent = garmentCount;
 
-    async function captureOneSide(video) {
-      const rawDataUrl = await FVAI.removeBackground(video);
-      const croppedDataUrl = await FVAI.autoCropGarment(rawDataUrl, video);
-      const imgObj = await loadImage(croppedDataUrl);
-      return { dataUrl: croppedDataUrl, imgObj };
-    }
-
-    async function startDualCapture() {
-      if (isCapturing) return;
-      isCapturing = true;
-
-      const btn = document.getElementById('captureBtn');
-      const origText = btn.innerHTML;
-      btn.disabled = true;
-      const stepsEl = document.getElementById('captureSteps');
-      stepsEl.classList.add('visible');
-
-      const video = document.getElementById('sellerVideo');
-
-      try {
-        // ═══ STEP 1: Capture FRONT ═══
-        setStepState('stepFront', 'active');
-        setStepState('stepFlip', '');
-        setStepState('stepBack', '');
-
-        btn.innerHTML = '<span class="spinner" style="width:18px;height:18px;border-width:2px;display:inline-block;vertical-align:middle;"></span> Capturing Front...';
-        toast('Capturing front side...', '');
-
-        const front = await captureOneSide(video);
-        setStepState('stepFront', 'done');
-
-        // ═══ STEP 2: Countdown to flip (6s delay) ═══
-        setStepState('stepFlip', 'active');
-        toast('🔄 Flip the garment! Capturing back in 6 seconds...', 'success');
-        btn.innerHTML = '🔄 Flip garment now!';
-
-        await showCountdown(6, '🔄 Flip Now!', 'Turn the garment to show the back side');
-
-        // ═══ STEP 3: Capture BACK ═══
-        setStepState('stepFlip', 'done');
-        setStepState('stepBack', 'active');
-        btn.innerHTML = '<span class="spinner" style="width:18px;height:18px;border-width:2px;display:inline-block;vertical-align:middle;"></span> Capturing Back...';
-        toast('Capturing back side...', '');
-
-        const back = await captureOneSide(video);
-        setStepState('stepBack', 'done');
-
-        // ═══ STEP 4: Register garment ═══
-        garmentCount++;
-        const garmentId = 'g' + Date.now();
-        const garmentName = `Garment ${garmentCount}`;
-
-        const garment = {
-          id: garmentId,
-          name: garmentName,
-          dataUrl: front.dataUrl,
-          imgObj: front.imgObj,
-          backDataUrl: back.dataUrl,
-          backImgObj: back.imgObj
-        };
-        garments.push(garment);
-
-        // Update seller thumbnails
-        addSellerThumbnail(garment);
-
-        // Update buyer gallery
-        addBuyerGarmentCard(garment);
-
-        // Auto-select first garment
-        if (garments.length === 1) {
-          selectGarment(garment);
+          toast(`${garmentName} captured (front + back)!`, "success");
+        } catch (e) {
+          console.error("Capture error:", e);
+          toast("Capture failed. Please try again.", "error");
         }
 
-        // Update counters
-        document.getElementById('captureCount').textContent = garmentCount;
-        document.getElementById('garmentCount').textContent = garmentCount;
+        btn.disabled = false;
+        btn.innerHTML = origText;
+        isCapturing = false;
 
-        toast(`${garmentName} captured (front + back)!`, 'success');
-      } catch (e) {
-        console.error('Capture error:', e);
-        toast('Capture failed. Please try again.', 'error');
+        // Fade steps out after a moment
+        setTimeout(() => stepsEl.classList.remove("visible"), 2000);
       }
 
-      btn.disabled = false;
-      btn.innerHTML = origText;
-      isCapturing = false;
+      function loadImage(dataUrl) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = dataUrl;
+        });
+      }
 
-      // Fade steps out after a moment
-      setTimeout(() => stepsEl.classList.remove('visible'), 2000);
-    }
+      // ── Seller Thumbnails ──
+      function addSellerThumbnail(garment) {
+        const strip = document.getElementById("sellerThumbs");
+        const thumb = document.createElement("div");
+        thumb.className = "thumb-item";
+        thumb.id = "seller-thumb-" + garment.id;
+        thumb.innerHTML = `<img src="${garment.dataUrl}" alt="${garment.name}">`;
+        thumb.addEventListener("click", () => selectGarment(garment));
+        strip.appendChild(thumb);
+      }
 
-    function loadImage(dataUrl) {
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => resolve(img);
-        img.onerror = reject;
-        img.src = dataUrl;
-      });
-    }
-
-    // ── Seller Thumbnails ──
-    function addSellerThumbnail(garment) {
-      const strip = document.getElementById('sellerThumbs');
-      const thumb = document.createElement('div');
-      thumb.className = 'thumb-item';
-      thumb.id = 'seller-thumb-' + garment.id;
-      thumb.innerHTML = `<img src="${garment.dataUrl}" alt="${garment.name}">`;
-      thumb.addEventListener('click', () => selectGarment(garment));
-      strip.appendChild(thumb);
-    }
-
-    // ── Buyer Garment Gallery ──
-    function addBuyerGarmentCard(garment) {
-      document.getElementById('noGarmentMsg').style.display = 'none';
-      const gallery = document.getElementById('garmentGallery');
-      const card = document.createElement('div');
-      card.className = 'garment-card';
-      card.id = 'buyer-card-' + garment.id;
-      card.innerHTML = `
+      // ── Buyer Garment Gallery ──
+      function addBuyerGarmentCard(garment) {
+        document.getElementById("noGarmentMsg").style.display = "none";
+        const gallery = document.getElementById("garmentGallery");
+        const card = document.createElement("div");
+        card.className = "garment-card";
+        card.id = "buyer-card-" + garment.id;
+        card.innerHTML = `
         <img src="${garment.dataUrl}" alt="${garment.name}">
         <div class="gc-label">${garment.name}</div>
         <div class="gc-tryon">👕 Try On</div>
       `;
-      card.addEventListener('click', () => selectGarment(garment));
-      gallery.appendChild(card);
-    }
-
-    // ── Select Garment for AR ──
-    function selectGarment(garment) {
-      selectedGarmentId = garment.id;
-      currentGarmentImage = garment.imgObj;
-      currentBackGarmentImg = garment.backImgObj || null;
-
-      // Update label
-      document.getElementById('currentGarmentLabel').textContent = `Trying on: ${garment.name}`;
-
-      // Highlight active in seller thumbs
-      document.querySelectorAll('.thumb-item').forEach(el => el.classList.remove('active'));
-      const sellerThumb = document.getElementById('seller-thumb-' + garment.id);
-      if (sellerThumb) sellerThumb.classList.add('active');
-
-      // Highlight active in buyer gallery
-      document.querySelectorAll('.garment-card').forEach(el => el.classList.remove('selected'));
-      const buyerCard = document.getElementById('buyer-card-' + garment.id);
-      if (buyerCard) buyerCard.classList.add('selected');
-
-      // Start AR
-      if (arEnabled) {
-        FVAI.resetSmoothing();
-        startPoseLoop();
+        card.addEventListener("click", () => selectGarment(garment));
+        gallery.appendChild(card);
       }
 
-      toast(`AR Try-on: ${garment.name}`, 'success');
-    }
+      // ── Select Garment for AR ──
+      function selectGarment(garment) {
+        selectedGarmentId = garment.id;
+        currentGarmentImage = garment.imgObj;
+        currentBackGarmentImg = garment.backImgObj || null;
 
-    // ── AR Pose Loop ──
-    function startPoseLoop() {
-      stopPoseLoop();
-      const video = document.getElementById('buyerVideo');
-      const canvas = document.getElementById('arCanvas');
-      const ctx = canvas.getContext('2d');
+        // Update label
+        document.getElementById(
+          "currentGarmentLabel"
+        ).textContent = `Trying on: ${garment.name}`;
 
-      async function loop() {
-        if (!arEnabled || !currentGarmentImage) {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          return;
+        // Highlight active in seller thumbs
+        document
+          .querySelectorAll(".thumb-item")
+          .forEach((el) => el.classList.remove("active"));
+        const sellerThumb = document.getElementById(
+          "seller-thumb-" + garment.id
+        );
+        if (sellerThumb) sellerThumb.classList.add("active");
+
+        // Highlight active in buyer gallery
+        document
+          .querySelectorAll(".garment-card")
+          .forEach((el) => el.classList.remove("selected"));
+        const buyerCard = document.getElementById("buyer-card-" + garment.id);
+        if (buyerCard) buyerCard.classList.add("selected");
+
+        // Start AR
+        if (arEnabled) {
+          FVAI.resetSmoothing();
+          startPoseLoop();
         }
 
-        try {
-          const keypoints = await FVAI.getPose(video);
-          FVAI.drawAROverlay(ctx, canvas.width, canvas.height, currentGarmentImage, keypoints, video, currentBackGarmentImg);
-        } catch (e) {
-          // Silently skip — no crash
+        toast(`AR Try-on: ${garment.name}`, "success");
+      }
+
+      // ── AR Pose Loop ──
+      function startPoseLoop() {
+        stopPoseLoop();
+        const video = document.getElementById("buyerVideo");
+        const canvas = document.getElementById("arCanvas");
+        const ctx = canvas.getContext("2d");
+
+        async function loop() {
+          if (!arEnabled || !currentGarmentImage) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+          }
+
+          try {
+            const keypoints = await FVAI.getPose(video);
+            FVAI.drawAROverlay(
+              ctx,
+              canvas.width,
+              canvas.height,
+              currentGarmentImage,
+              keypoints,
+              video,
+              currentBackGarmentImg
+            );
+          } catch (e) {
+            // Silently skip — no crash
+          }
+
+          poseLoopId = requestAnimationFrame(loop);
         }
-
-        poseLoopId = requestAnimationFrame(loop);
+        loop();
       }
-      loop();
-    }
 
-    function stopPoseLoop() {
-      if (poseLoopId) {
-        cancelAnimationFrame(poseLoopId);
-        poseLoopId = null;
+      function stopPoseLoop() {
+        if (poseLoopId) {
+          cancelAnimationFrame(poseLoopId);
+          poseLoopId = null;
+        }
       }
-    }
 
-    // ── Toggle AR ──
-    function toggleAR() {
-      arEnabled = !arEnabled;
-      document.getElementById('arToggleBtn').classList.toggle('active', arEnabled);
+      // ── Toggle AR ──
+      function toggleAR() {
+        arEnabled = !arEnabled;
+        document
+          .getElementById("arToggleBtn")
+          .classList.toggle("active", arEnabled);
 
-      if (arEnabled && currentGarmentImage) {
-        startPoseLoop();
-      } else {
-        stopPoseLoop();
-        const canvas = document.getElementById('arCanvas');
-        canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+        if (arEnabled && currentGarmentImage) {
+          startPoseLoop();
+        } else {
+          stopPoseLoop();
+          const canvas = document.getElementById("arCanvas");
+          canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+        }
+        toast(arEnabled ? "AR overlay enabled" : "AR overlay disabled", "");
       }
-      toast(arEnabled ? 'AR overlay enabled' : 'AR overlay disabled', '');
-    }
 
-    // ── Screenshot ──
-    function takeScreenshot() {
-      const video = document.getElementById('buyerVideo');
-      const arCanvas = document.getElementById('arCanvas');
-      const comp = document.createElement('canvas');
-      comp.width = video.videoWidth || 640;
-      comp.height = video.videoHeight || 480;
-      const ctx = comp.getContext('2d');
-      ctx.drawImage(video, 0, 0, comp.width, comp.height);
-      if (arEnabled && currentGarmentImage) {
-        ctx.drawImage(arCanvas, 0, 0, comp.width, comp.height);
+      // ── Screenshot ──
+      function takeScreenshot() {
+        const video = document.getElementById("buyerVideo");
+        const arCanvas = document.getElementById("arCanvas");
+        const comp = document.createElement("canvas");
+        comp.width = video.videoWidth || 640;
+        comp.height = video.videoHeight || 480;
+        const ctx = comp.getContext("2d");
+        ctx.drawImage(video, 0, 0, comp.width, comp.height);
+        if (arEnabled && currentGarmentImage) {
+          ctx.drawImage(arCanvas, 0, 0, comp.width, comp.height);
+        }
+        const link = document.createElement("a");
+        link.download = `fitvision_demo_${Date.now()}.png`;
+        link.href = comp.toDataURL("image/png");
+        link.click();
+        toast("Screenshot saved!", "success");
       }
-      const link = document.createElement('a');
-      link.download = `fitvision_demo_${Date.now()}.png`;
-      link.href = comp.toDataURL('image/png');
-      link.click();
-      toast('Screenshot saved!', 'success');
-    }
 
-    // ── Toast ──
-    function toast(msg, type) {
-      const c = document.getElementById('toastContainer');
-      const t = document.createElement('div');
-      t.className = `toast ${type ? 'toast-' + type : ''}`;
-      t.textContent = msg;
-      c.appendChild(t);
-      setTimeout(() => t.remove(), 3000);
-    }
-
-    // ── Visibility handling ──
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        stopPoseLoop();
-      } else if (arEnabled && currentGarmentImage) {
-        startPoseLoop();
+      // ── Toast ──
+      function toast(msg, type) {
+        const c = document.getElementById("toastContainer");
+        const t = document.createElement("div");
+        t.className = `toast ${type ? "toast-" + type : ""}`;
+        t.textContent = msg;
+        c.appendChild(t);
+        setTimeout(() => t.remove(), 3000);
       }
-    });
 
-    // ── Start ──
-    init();
-  </script>
-</body>
+      // ── Visibility handling ──
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          stopPoseLoop();
+        } else if (arEnabled && currentGarmentImage) {
+          startPoseLoop();
+        }
+      });
+
+      // ── Start ──
+      init();
+    </script>
+  </body>
 </html>
