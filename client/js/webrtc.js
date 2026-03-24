@@ -1,29 +1,28 @@
 // ==========================================
-// FitVision — WebRTC Peer Connection Module
-// Native RTCPeerConnection, no third-party libs
+// FitVision — WebRTC Module
+// Native RTCPeerConnection
 // ==========================================
 
-const ICE_SERVERS = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
-  ]
-};
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' }
+];
 
 let peerConnection = null;
-let localStream = null;
-let remoteStreamCallback = null;
+let onIceCandidateCb = null;
+let onTrackCb = null;
+let onConnectionStateChangeCb = null;
 
 /**
- * Initialize WebRTC with local stream and remote stream callback
+ * Initialize a new WebRTC peer connection
  */
-function initWebRTC(stream, onRemoteStream) {
-  localStream = stream;
-  remoteStreamCallback = onRemoteStream;
+function initWebRTC(localStream, onRemoteStream) {
+  closeConnection();
 
-  peerConnection = new RTCPeerConnection(ICE_SERVERS);
+  peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-  // Add local stream tracks to peer connection
+  // Add local tracks
   if (localStream) {
     localStream.getTracks().forEach(track => {
       peerConnection.addTrack(track, localStream);
@@ -32,147 +31,109 @@ function initWebRTC(stream, onRemoteStream) {
 
   // Handle remote stream
   peerConnection.ontrack = (event) => {
-    console.log('[WebRTC] Remote track received:', event.track.kind);
-    if (remoteStreamCallback && event.streams[0]) {
-      remoteStreamCallback(event.streams[0]);
+    console.log('[WebRTC] Remote track received');
+    if (onRemoteStream && event.streams[0]) {
+      onRemoteStream(event.streams[0]);
     }
+    if (onTrackCb) onTrackCb(event);
   };
 
-  // Handle ICE candidates
+  // ICE candidates
   peerConnection.onicecandidate = (event) => {
-    if (event.candidate) {
-      // This will be handled by the caller
-      if (peerConnection._onIceCandidate) {
-        peerConnection._onIceCandidate(event.candidate);
-      }
+    if (event.candidate && onIceCandidateCb) {
+      onIceCandidateCb(event.candidate);
     }
   };
 
   // Connection state monitoring
   peerConnection.onconnectionstatechange = () => {
-    console.log('[WebRTC] Connection state:', peerConnection.connectionState);
-    if (peerConnection._onConnectionStateChange) {
-      peerConnection._onConnectionStateChange(peerConnection.connectionState);
-    }
+    const state = peerConnection.connectionState;
+    console.log('[WebRTC] Connection state:', state);
+    if (onConnectionStateChangeCb) onConnectionStateChangeCb(state);
   };
 
   peerConnection.oniceconnectionstatechange = () => {
-    console.log('[WebRTC] ICE connection state:', peerConnection.iceConnectionState);
+    console.log('[WebRTC] ICE state:', peerConnection.iceConnectionState);
   };
 
   return peerConnection;
-}
-
-/**
- * Set callback for ICE candidates (to send via socket)
- */
-function onIceCandidateGenerated(callback) {
-  if (peerConnection) {
-    peerConnection._onIceCandidate = callback;
-  }
-}
-
-/**
- * Set callback for connection state changes
- */
-function onConnectionStateChange(callback) {
-  if (peerConnection) {
-    peerConnection._onConnectionStateChange = callback;
-  }
 }
 
 /**
  * Create and return an SDP offer
  */
 async function createOffer() {
-  if (!peerConnection) throw new Error('PeerConnection not initialized');
-
+  if (!peerConnection) return null;
   const offer = await peerConnection.createOffer({
     offerToReceiveAudio: true,
     offerToReceiveVideo: true
   });
   await peerConnection.setLocalDescription(offer);
-  console.log('[WebRTC] Offer created');
   return offer;
 }
 
 /**
- * Handle an incoming SDP offer, create and return an answer
+ * Handle incoming SDP offer and create answer
  */
 async function handleOffer(offer) {
-  if (!peerConnection) throw new Error('PeerConnection not initialized');
-
+  if (!peerConnection) return null;
   await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
   const answer = await peerConnection.createAnswer();
   await peerConnection.setLocalDescription(answer);
-  console.log('[WebRTC] Answer created');
   return answer;
 }
 
 /**
- * Handle an incoming SDP answer
+ * Handle incoming SDP answer
  */
 async function handleAnswer(answer) {
-  if (!peerConnection) throw new Error('PeerConnection not initialized');
-
+  if (!peerConnection) return;
   await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-  console.log('[WebRTC] Remote description set from answer');
 }
 
 /**
- * Handle an incoming ICE candidate
+ * Handle incoming ICE candidate
  */
 async function handleIceCandidate(candidate) {
   if (!peerConnection) return;
-
   try {
     await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-  } catch (error) {
-    console.error('[WebRTC] Error adding ICE candidate:', error);
+  } catch (err) {
+    console.error('[WebRTC] Error adding ICE candidate:', err);
   }
 }
 
 /**
- * Replace a track (e.g., when switching cameras) without renegotiation
+ * Replace video track (e.g. camera switch)
  */
-async function replaceTrack(newTrack) {
+function replaceVideoTrack(newTrack) {
   if (!peerConnection) return;
-
-  const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === newTrack.kind);
+  const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
   if (sender) {
-    await sender.replaceTrack(newTrack);
-    console.log('[WebRTC] Track replaced:', newTrack.kind);
+    sender.replaceTrack(newTrack);
   }
 }
 
 /**
- * Close the peer connection and clean up
+ * Close the peer connection
  */
 function closeConnection() {
   if (peerConnection) {
     peerConnection.close();
     peerConnection = null;
-    console.log('[WebRTC] Connection closed');
   }
 }
 
-/**
- * Get the current peer connection
- */
-function getPeerConnection() {
-  return peerConnection;
-}
+function onIceCandidateGenerated(cb) { onIceCandidateCb = cb; }
+function onRemoteTrack(cb) { onTrackCb = cb; }
+function onConnectionState(cb) { onConnectionStateChangeCb = cb; }
 
-// Make available globally
+function getPeerConnection() { return peerConnection; }
+
+// Expose globally
 window.FVWebRTC = {
-  initWebRTC,
-  onIceCandidateGenerated,
-  onConnectionStateChange,
-  createOffer,
-  handleOffer,
-  handleAnswer,
-  handleIceCandidate,
-  replaceTrack,
-  closeConnection,
+  initWebRTC, createOffer, handleOffer, handleAnswer,
+  handleIceCandidate, replaceVideoTrack, closeConnection,
+  onIceCandidateGenerated, onRemoteTrack, onConnectionState,
   getPeerConnection
 };

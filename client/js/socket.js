@@ -1,9 +1,8 @@
 // ==========================================
 // FitVision — Socket.io Client Module
-// Socket.io v4.7.2 via CDN (loaded by HTML)
 // ==========================================
 
-// Server URL — change this to your Railway URL in production
+// Production signaling server URL
 const SERVER_URL = 'https://fitvision-production.up.railway.app';
 
 let socket = null;
@@ -15,9 +14,8 @@ function connectSocket(serverUrl) {
   const url = serverUrl || SERVER_URL;
   socket = io(url, {
     transports: ['websocket', 'polling'],
-    withCredentials: false,
     reconnection: true,
-    reconnectionAttempts: 5,
+    reconnectionAttempts: 10,
     reconnectionDelay: 2000
   });
 
@@ -37,145 +35,71 @@ function connectSocket(serverUrl) {
 }
 
 /**
- * Create a new room — returns Promise<roomId>
- */
-function createRoom() {
-  return new Promise((resolve, reject) => {
-    if (!socket || !socket.connected) {
-      reject(new Error('Socket not connected'));
-      return;
-    }
-
-    socket.emit('create-room', {}, (response) => {
-      if (response && response.roomId) {
-        resolve(response.roomId);
-      }
-    });
-
-    // Also listen for room-created event as fallback
-    socket.once('room-created', (data) => {
-      resolve(data.roomId);
-    });
-
-    // Timeout after 10s
-    setTimeout(() => reject(new Error('Room creation timeout')), 10000);
-  });
-}
-
-/**
- * Join an existing room
- */
-function joinRoom(roomId, role, userId, userName) {
-  if (!socket) return;
-  socket.emit('join-room', { roomId, role, userId, userName });
-}
-
-/**
- * Send WebRTC offer
- */
-function sendOffer(roomId, offer) {
-  if (!socket) return;
-  socket.emit('offer', { roomId, offer });
-}
-
-/**
- * Send WebRTC answer
- */
-function sendAnswer(roomId, answer) {
-  if (!socket) return;
-  socket.emit('answer', { roomId, answer });
-}
-
-/**
- * Send ICE candidate
- */
-function sendIceCandidate(roomId, candidate) {
-  if (!socket) return;
-  socket.emit('ice-candidate', { roomId, candidate });
-}
-
-/**
- * Leave the current room
- */
-function leaveRoom(roomId) {
-  if (!socket) return;
-  socket.emit('leave-room', { roomId });
-}
-
-/**
- * Emit garment-captured to buyer
- */
-function emitGarmentCaptured(roomId, garmentDataUrl, garmentName, bgRemoved) {
-  if (!socket) return;
-  socket.emit('garment-captured', {
-    roomId,
-    garmentDataUrl,
-    garmentName,
-    bgRemoved,
-    timestamp: Date.now()
-  });
-}
-
-// ── Event Listeners ──
-
-function onUserJoined(callback) {
-  if (!socket) return;
-  socket.on('user-joined', callback);
-}
-
-function onOffer(callback) {
-  if (!socket) return;
-  socket.on('offer', callback);
-}
-
-function onAnswer(callback) {
-  if (!socket) return;
-  socket.on('answer', callback);
-}
-
-function onIceCandidate(callback) {
-  if (!socket) return;
-  socket.on('ice-candidate', callback);
-}
-
-function onUserLeft(callback) {
-  if (!socket) return;
-  socket.on('user-left', callback);
-}
-
-function onRoomFull(callback) {
-  if (!socket) return;
-  socket.on('room-full', callback);
-}
-
-function onGarmentCaptured(callback) {
-  if (!socket) return;
-  socket.on('garment-captured', callback);
-}
-
-/**
  * Get the current socket instance
  */
 function getSocket() {
   return socket;
 }
 
-// Make available globally (since HTML loads via script tag)
+// ── Emitters ──
+
+function createRoom(callback) {
+  if (!socket) return;
+  socket.emit('create-room', {}, callback);
+}
+
+function joinRoom(roomId, role, userId, userName) {
+  if (!socket) return;
+  socket.emit('join-room', { roomId, role, userId, userName });
+}
+
+function leaveRoom(roomId) {
+  if (!socket) return;
+  socket.emit('leave-room', { roomId });
+}
+
+function sendOffer(roomId, offer) {
+  if (!socket) return;
+  socket.emit('offer', { roomId, offer });
+}
+
+function sendAnswer(roomId, answer) {
+  if (!socket) return;
+  socket.emit('answer', { roomId, answer });
+}
+
+function sendIceCandidate(roomId, candidate) {
+  if (!socket) return;
+  socket.emit('ice-candidate', { roomId, candidate });
+}
+
+function sendGarmentCaptured(roomId, garmentDataUrl, garmentName) {
+  if (!socket) return;
+  socket.emit('garment-captured', {
+    roomId, garmentDataUrl, garmentName,
+    timestamp: Date.now()
+  });
+}
+
+// ── Listeners ──
+
+function onRoomCreated(cb)     { if (socket) socket.on('room-created', cb); }
+function onUserJoined(cb)      { if (socket) socket.on('user-joined', cb); }
+function onUserLeft(cb)        { if (socket) socket.on('user-left', cb); }
+function onRoomFull(cb)        { if (socket) socket.on('room-full', cb); }
+function onOffer(cb)           { if (socket) socket.on('offer', cb); }
+function onAnswer(cb)          { if (socket) socket.on('answer', cb); }
+function onIceCandidate(cb)    { if (socket) socket.on('ice-candidate', cb); }
+function onGarmentCaptured(cb) { if (socket) socket.on('garment-captured', cb); }
+function onReplaced(cb)        { if (socket) socket.on('replaced', cb); }
+
+// Expose globally
 window.FVSocket = {
-  connectSocket,
-  createRoom,
-  joinRoom,
-  sendOffer,
-  sendAnswer,
-  sendIceCandidate,
-  leaveRoom,
-  emitGarmentCaptured,
-  onUserJoined,
-  onOffer,
-  onAnswer,
-  onIceCandidate,
-  onUserLeft,
-  onRoomFull,
-  onGarmentCaptured,
-  getSocket
+  connectSocket, getSocket,
+  createRoom, joinRoom, leaveRoom,
+  sendOffer, sendAnswer, sendIceCandidate,
+  sendGarmentCaptured,
+  onRoomCreated, onUserJoined, onUserLeft, onRoomFull,
+  onOffer, onAnswer, onIceCandidate,
+  onGarmentCaptured, onReplaced
 };

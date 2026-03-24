@@ -9,8 +9,7 @@ import { getFirestore, doc, setDoc, getDoc, serverTimestamp } from 'https://www.
 import { getStorage, ref, uploadString, getDownloadURL } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
 
 // ═══════════════════════════════════════════
-// PASTE YOUR FIREBASE CONFIG HERE
-// Get it from Firebase Console → Project Settings → General → Your apps → Web app
+// FIREBASE CONFIG — Production
 // ═══════════════════════════════════════════
 const firebaseConfig = {
   apiKey: "AIzaSyAK5FBPXteGJzL0p_iZZ3T7diU3uTDwDg4",
@@ -37,72 +36,46 @@ async function registerUser(email, password, displayName, role) {
   try {
     const userCred = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCred.user;
-
-    // Update display name
     await updateProfile(user, { displayName });
-
-    // Store user data in Firestore
     await setDoc(doc(db, 'users', user.uid), {
-      role,
-      displayName,
-      email,
+      role, displayName, email,
       createdAt: serverTimestamp()
     });
-
     return { success: true, user, role };
   } catch (error) {
     let message = 'Registration failed';
     switch (error.code) {
-      case 'auth/email-already-in-use':
-        message = 'This email is already registered';
-        break;
-      case 'auth/invalid-email':
-        message = 'Invalid email address';
-        break;
-      case 'auth/weak-password':
-        message = 'Password must be at least 6 characters';
-        break;
-      default:
-        message = error.message;
+      case 'auth/email-already-in-use': message = 'This email is already registered'; break;
+      case 'auth/invalid-email': message = 'Invalid email address'; break;
+      case 'auth/weak-password': message = 'Password must be at least 6 characters'; break;
+      default: message = error.message;
     }
     return { success: false, error: message };
   }
 }
 
 /**
- * Login user and redirect based on role
+ * Login user and return role
  */
 async function loginUser(email, password) {
   try {
     const userCred = await signInWithEmailAndPassword(auth, email, password);
     const user = userCred.user;
-
-    // Fetch role from Firestore
     const userDoc = await getDoc(doc(db, 'users', user.uid));
     if (!userDoc.exists()) {
       return { success: false, error: 'User data not found. Please register again.' };
     }
-
     const role = userDoc.data().role;
     return { success: true, user, role };
   } catch (error) {
     let message = 'Login failed';
     switch (error.code) {
-      case 'auth/user-not-found':
-        message = 'No account found with this email';
-        break;
+      case 'auth/user-not-found': message = 'No account found with this email'; break;
       case 'auth/wrong-password':
-      case 'auth/invalid-credential':
-        message = 'Incorrect password';
-        break;
-      case 'auth/invalid-email':
-        message = 'Invalid email address';
-        break;
-      case 'auth/too-many-requests':
-        message = 'Too many attempts. Please try again later';
-        break;
-      default:
-        message = error.message;
+      case 'auth/invalid-credential': message = 'Incorrect password'; break;
+      case 'auth/invalid-email': message = 'Invalid email address'; break;
+      case 'auth/too-many-requests': message = 'Too many attempts. Try again later'; break;
+      default: message = error.message;
     }
     return { success: false, error: message };
   }
@@ -122,19 +95,15 @@ async function logoutUser() {
 
 /**
  * Check auth state and protect routes
- * @param {string} requiredRole - 'seller' or 'buyer' — the role this page requires
- * @returns {Promise<{user, role, displayName}>}
  */
 function checkAuth(requiredRole) {
   return new Promise((resolve, reject) => {
     onAuthStateChanged(auth, async (user) => {
       if (!user) {
-        // Not logged in → redirect to login
         window.location.href = 'index.html';
         reject(new Error('Not authenticated'));
         return;
       }
-
       try {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         if (!userDoc.exists()) {
@@ -143,21 +112,15 @@ function checkAuth(requiredRole) {
           reject(new Error('User doc not found'));
           return;
         }
-
         const data = userDoc.data();
         const role = data.role;
-
-        // Role mismatch → redirect to correct page
         if (requiredRole && role !== requiredRole) {
           window.location.href = role === 'seller' ? 'seller.html' : 'buyer.html';
           reject(new Error('Role mismatch'));
           return;
         }
-
         resolve({
-          user,
-          uid: user.uid,
-          role,
+          user, uid: user.uid, role,
           displayName: data.displayName || user.displayName || 'User',
           email: data.email
         });
@@ -169,9 +132,6 @@ function checkAuth(requiredRole) {
   });
 }
 
-/**
- * Get current user synchronously (returns null if not yet loaded)
- */
 function getCurrentUser() {
   return auth.currentUser;
 }
@@ -199,10 +159,7 @@ async function saveGarment(sellerId, roomId, imageUrl, name, bgRemoved) {
   try {
     const garmentRef = doc(db, 'garments', `${sellerId}_${Date.now()}`);
     await setDoc(garmentRef, {
-      sellerId,
-      roomId,
-      imageUrl,
-      name,
+      sellerId, roomId, imageUrl, name,
       capturedAt: serverTimestamp(),
       bgRemoved: bgRemoved || false
     });
@@ -219,9 +176,7 @@ async function saveGarment(sellerId, roomId, imageUrl, name, bgRemoved) {
 async function createRoomDoc(roomId, sellerId, sellerName) {
   try {
     await setDoc(doc(db, 'rooms', roomId), {
-      sellerId,
-      sellerName,
-      status: 'waiting',
+      sellerId, sellerName, status: 'waiting',
       createdAt: serverTimestamp()
     });
     return { success: true };
@@ -232,7 +187,7 @@ async function createRoomDoc(roomId, sellerId, sellerName) {
 }
 
 /**
- * Update room status in Firestore
+ * Update room status
  */
 async function updateRoomStatus(roomId, status) {
   try {
@@ -242,16 +197,10 @@ async function updateRoomStatus(roomId, status) {
   }
 }
 
-// Export everything
 export {
   auth, db, storage,
-  registerUser,
-  loginUser,
-  logoutUser,
-  checkAuth,
-  getCurrentUser,
-  uploadGarmentImage,
-  saveGarment,
-  createRoomDoc,
-  updateRoomStatus
+  registerUser, loginUser, logoutUser,
+  checkAuth, getCurrentUser,
+  uploadGarmentImage, saveGarment,
+  createRoomDoc, updateRoomStatus
 };

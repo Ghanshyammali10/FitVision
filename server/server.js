@@ -26,7 +26,7 @@ const io = new Server(server, {
   pingTimeout: 5000
 });
 
-// In-memory rooms: { roomId: [{ socketId, role }] }
+// In-memory rooms: { roomId: [{ socketId, role, userId, userName }] }
 const rooms = {};
 
 // Generate 6-character alphanumeric room ID
@@ -39,10 +39,12 @@ function generateRoomId() {
   return id;
 }
 
+// Health check endpoint
 app.get('/', (req, res) => {
   res.json({
     status: 'FitVision Signaling Server is running',
     rooms: Object.keys(rooms).length,
+    uptime: process.uptime(),
     timestamp: new Date().toISOString()
   });
 });
@@ -50,35 +52,33 @@ app.get('/', (req, res) => {
 io.on('connection', (socket) => {
   console.log(`[Connect] ${socket.id}`);
 
-  // Create a new room
+  // ── Create a new room ──
   socket.on('create-room', (data, callback) => {
     let roomId = generateRoomId();
-    while (rooms[roomId]) {
-      roomId = generateRoomId();
-    }
+    while (rooms[roomId]) roomId = generateRoomId();
     rooms[roomId] = [];
     console.log(`[Room Created] ${roomId} by ${socket.id}`);
-    if (typeof callback === 'function') {
-      callback({ roomId });
-    }
+    if (typeof callback === 'function') callback({ roomId });
     socket.emit('room-created', { roomId });
   });
 
-  // Join an existing room
+  // ── Join an existing room ──
   socket.on('join-room', ({ roomId, role, userId, userName }) => {
-    if (!rooms[roomId]) {
-      rooms[roomId] = [];
-    }
+    if (!rooms[roomId]) rooms[roomId] = [];
 
     // Remove any previous room membership for this socket
     leaveAllRooms(socket);
 
-    // Prevent "room full" due to page refreshes or ghost connections
-    // If a user with the same role tries to join again, replace the old one
-    const existingIdx = rooms[roomId].findIndex(p => p.role === role);
-    if (existingIdx !== -1) {
-      console.log(`[Replace Role] Removing old ${role} (${rooms[roomId][existingIdx].socketId}) resolving ghost connection`);
-      rooms[roomId].splice(existingIdx, 1);
+    // Ghost connection fix: if same role is already in the room, replace old
+    const oldIdx = rooms[roomId].findIndex(p => p.role === role);
+    if (oldIdx !== -1) {
+      console.log(`[Replace] Removing old ${role} socket ${rooms[roomId][oldIdx].socketId}`);
+      const oldSocket = io.sockets.sockets.get(rooms[roomId][oldIdx].socketId);
+      if (oldSocket) {
+        oldSocket.leave(roomId);
+        oldSocket.emit('replaced', { reason: 'Another tab or device connected with your role.' });
+      }
+      rooms[roomId].splice(oldIdx, 1);
     }
 
     if (rooms[roomId].length >= 2) {
@@ -92,42 +92,50 @@ io.on('connection', (socket) => {
     socket.roomId = roomId;
     socket.userRole = role;
 
-    console.log(`[Join Room] ${socket.id} as ${role} → room ${roomId} (${rooms[roomId].length}/2)`);
+    console.log(`[Join] ${socket.id} as ${role} → room ${roomId} (${rooms[roomId].length}/2)`);
 
-    // Notify other peers in the room
+    // Notify other peers
     socket.to(roomId).emit('user-joined', { role, userId, userName, socketId: socket.id });
+
+    // If there's already another user, tell this socket about them
+    const otherUser = rooms[roomId].find(p => p.socketId !== socket.id);
+    if (otherUser) {
+      socket.emit('user-joined', {
+        role: otherUser.role,
+        userId: otherUser.userId,
+        userName: otherUser.userName,
+        socketId: otherUser.socketId
+      });
+    }
   });
 
-  // Relay WebRTC offer
+  // ── WebRTC Signaling ──
   socket.on('offer', ({ roomId, offer }) => {
     console.log(`[Offer] from ${socket.id} in room ${roomId}`);
     socket.to(roomId).emit('offer', { offer, socketId: socket.id });
   });
 
-  // Relay WebRTC answer
   socket.on('answer', ({ roomId, answer }) => {
     console.log(`[Answer] from ${socket.id} in room ${roomId}`);
     socket.to(roomId).emit('answer', { answer, socketId: socket.id });
   });
 
-  // Relay ICE candidate
   socket.on('ice-candidate', ({ roomId, candidate }) => {
     socket.to(roomId).emit('ice-candidate', { candidate, socketId: socket.id });
   });
 
-  // Relay garment captured event
+  // ── Garment Relay ──
   socket.on('garment-captured', (data) => {
     const { roomId } = data;
-    console.log(`[Garment Captured] in room ${roomId}`);
+    console.log(`[Garment] captured in room ${roomId}`);
     socket.to(roomId).emit('garment-captured', data);
   });
 
-  // Leave room
+  // ── Leave / Disconnect ──
   socket.on('leave-room', ({ roomId }) => {
     handleLeaveRoom(socket, roomId);
   });
 
-  // Disconnect
   socket.on('disconnect', () => {
     console.log(`[Disconnect] ${socket.id}`);
     leaveAllRooms(socket);
@@ -136,14 +144,10 @@ io.on('connection', (socket) => {
 
 function handleLeaveRoom(socket, roomId) {
   if (!roomId || !rooms[roomId]) return;
-
   rooms[roomId] = rooms[roomId].filter(p => p.socketId !== socket.id);
   socket.leave(roomId);
-  socket.to(roomId).emit('user-left', { socketId: socket.id });
-
-  console.log(`[Leave Room] ${socket.id} left ${roomId} (${rooms[roomId].length} remaining)`);
-
-  // Clean up empty rooms
+  socket.to(roomId).emit('user-left', { socketId: socket.id, role: socket.userRole });
+  console.log(`[Leave] ${socket.id} left ${roomId} (${rooms[roomId].length} remaining)`);
   if (rooms[roomId].length === 0) {
     delete rooms[roomId];
     console.log(`[Room Deleted] ${roomId}`);
@@ -153,9 +157,7 @@ function handleLeaveRoom(socket, roomId) {
 function leaveAllRooms(socket) {
   for (const roomId in rooms) {
     const idx = rooms[roomId].findIndex(p => p.socketId === socket.id);
-    if (idx !== -1) {
-      handleLeaveRoom(socket, roomId);
-    }
+    if (idx !== -1) handleLeaveRoom(socket, roomId);
   }
 }
 
