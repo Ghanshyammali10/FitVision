@@ -4,7 +4,7 @@
 // ==========================================
 
 // Server URL — change this to your Railway URL in production
-const SERVER_URL = 'http://localhost:3001';
+const SERVER_URL = 'https://fitvision-production.up.railway.app';
 
 let socket = null;
 
