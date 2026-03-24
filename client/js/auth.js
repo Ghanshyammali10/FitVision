@@ -13,12 +13,12 @@ import { getStorage, ref, uploadString, getDownloadURL } from 'https://www.gstat
 // Get it from Firebase Console → Project Settings → General → Your apps → Web app
 // ═══════════════════════════════════════════
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyAK5FBPXteGJzL0p_iZZ3T7diU3uTDwDg4",
+  authDomain: "myapp-79553.firebaseapp.com",
+  projectId: "myapp-79553",
+  storageBucket: "myapp-79553.firebasestorage.app",
+  messagingSenderId: "65124833552",
+  appId: "1:65124833552:web:fb55f926e613a1c3496d95"
 };
 
 // Initialize Firebase
