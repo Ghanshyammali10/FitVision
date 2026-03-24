@@ -1,5 +1,5 @@
 // ==========================================
-// FitVision — AI Module (v3 — Production AR)
+// FitVision — AI Module (v4 — Fixed Crop + Alignment)
 // TensorFlow.js: Body Segmentation, Pose Detection, Face Detection
 // ==========================================
 
@@ -10,20 +10,14 @@ let modelsLoaded = false;
 
 // ═══════════════════════════════════════════
 // SMOOTHING — Adaptive Exponential Moving Average
-// Prevents garment jitter by blending frames
-// Uses velocity-aware adaptive smoothing:
-//   - Slow movements → heavy smoothing (less jitter)
-//   - Fast movements → light smoothing (less lag)
 // ═══════════════════════════════════════════
 const smoothing = {
   x: null, y: null, w: null, h: null, angle: null,
-  baseFactor: 0.3,   // Base EMA factor
-  minFactor: 0.15,   // Heavy smoothing for slow motion
-  maxFactor: 0.6,    // Light smoothing for fast motion
-  velocityThreshold: 15, // px/frame to consider "fast"
-  prevRawX: null,
-  prevRawY: null,
-  confidence: 1.0    // Tracks overall detection confidence for fade
+  baseFactor: 0.3,
+  minFactor: 0.15,
+  maxFactor: 0.6,
+  velocityThreshold: 15,
+  confidence: 1.0
 };
 
 function smooth(key, rawValue) {
@@ -31,15 +25,12 @@ function smooth(key, rawValue) {
     smoothing[key] = rawValue;
     return rawValue;
   }
-
-  // Adaptive factor based on movement velocity
   let factor = smoothing.baseFactor;
   if (key === 'x' || key === 'y') {
     const delta = Math.abs(rawValue - smoothing[key]);
     const t = Math.min(delta / smoothing.velocityThreshold, 1.0);
     factor = smoothing.minFactor + t * (smoothing.maxFactor - smoothing.minFactor);
   }
-
   smoothing[key] = smoothing[key] + factor * (rawValue - smoothing[key]);
   return smoothing[key];
 }
@@ -50,8 +41,6 @@ function resetSmoothing() {
   smoothing.w = null;
   smoothing.h = null;
   smoothing.angle = null;
-  smoothing.prevRawX = null;
-  smoothing.prevRawY = null;
   smoothing.confidence = 1.0;
 }
 
@@ -78,7 +67,7 @@ async function loadModels(onProgress) {
       report('Body Segmentation', 'Skipped (using fallback)', 35);
     }
 
-    // 2. Pose Detection (for AR overlay — THE KEY MODEL)
+    // 2. Pose Detection (for AR overlay + garment cropping)
     report('Pose Detection', 'Loading...', 40);
     try {
       poseDetector = await poseDetection.createDetector(
@@ -167,9 +156,18 @@ function fallbackCapture(videoElement) {
 }
 
 // ═══════════════════════════════════════════
-// AUTO-CROP GARMENT
-// Trims transparent pixels + crops to torso region
-// using pose detection for precise body-part isolation
+// AUTO-CROP GARMENT — Polygon Clipping
+//
+// The key problem: body segmentation removes background but
+// keeps the ENTIRE body (head, arms, legs). We need ONLY the
+// garment (shirt/t-shirt area: shoulders to hips).
+//
+// Solution:
+// 1. Detect pose to find shoulder, hip, elbow keypoints
+// 2. Build a torso polygon (trapezoid shape)
+// 3. Clip the image to ONLY that polygon
+// 4. Everything outside (head, hands, legs) becomes transparent
+// 5. Alpha-trim the result for a tight crop
 // ═══════════════════════════════════════════
 
 async function autoCropGarment(dataUrl, videoElement) {
@@ -179,8 +177,15 @@ async function autoCropGarment(dataUrl, videoElement) {
       const sw = img.width;
       const sh = img.height;
 
-      // Step 1: Try pose-based cropping (shoulders to hips)
-      let cropBounds = null;
+      // Draw original image
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = sw;
+      srcCanvas.height = sh;
+      const srcCtx = srcCanvas.getContext('2d');
+      srcCtx.drawImage(img, 0, 0);
+
+      // Step 1: Get pose keypoints from the video
+      let clipped = false;
       if (poseDetector && videoElement) {
         try {
           const poses = await poseDetector.estimatePoses(videoElement, { flipHorizontal: false });
@@ -196,98 +201,107 @@ async function autoCropGarment(dataUrl, videoElement) {
             const re = kp['right_elbow'];
 
             if (ls && rs && ls.score > 0.3 && rs.score > 0.3) {
-              const shoulderWidth = Math.abs(rs.x - ls.x);
-              const padding = shoulderWidth * 0.5; // Extra space for sleeves
+              const shoulderW = Math.abs(rs.x - ls.x);
 
-              // Top: above shoulders
-              let top = Math.min(ls.y, rs.y) - shoulderWidth * 0.25;
+              // Build torso polygon points
+              // Top: neckline (slightly above shoulders, no head)
+              const neckY = Math.min(ls.y, rs.y) - shoulderW * 0.15;
 
-              // Bottom: at hips or estimate
-              let bottom;
+              // Bottom: below hips
+              let bottomY;
               if (lh && rh && lh.score > 0.25 && rh.score > 0.25) {
-                bottom = Math.max(lh.y, rh.y) + shoulderWidth * 0.15;
+                bottomY = Math.max(lh.y, rh.y) + shoulderW * 0.1;
               } else {
-                bottom = Math.max(ls.y, rs.y) + shoulderWidth * 1.4;
+                bottomY = Math.max(ls.y, rs.y) + shoulderW * 1.3;
               }
 
-              // Left/Right: beyond shoulders (include sleeves/arms)
-              let left = Math.min(ls.x, rs.x) - padding;
-              let right = Math.max(ls.x, rs.x) + padding;
+              // Sleeve width: extend to elbows or fixed padding
+              let leftX = Math.min(ls.x, rs.x) - shoulderW * 0.45;
+              let rightX = Math.max(ls.x, rs.x) + shoulderW * 0.45;
 
-              // Extend to elbows if detected (for sleeve coverage)
-              if (le && le.score > 0.3) left = Math.min(left, le.x - shoulderWidth * 0.15);
-              if (re && re.score > 0.3) right = Math.max(right, re.x + shoulderWidth * 0.15);
+              if (le && le.score > 0.3) leftX = Math.min(leftX, le.x - shoulderW * 0.1);
+              if (re && re.score > 0.3) rightX = Math.max(rightX, re.x + shoulderW * 0.1);
 
-              // Clamp to image bounds
-              cropBounds = {
-                x: Math.max(0, Math.floor(left)),
-                y: Math.max(0, Math.floor(top)),
-                w: Math.min(sw, Math.ceil(right)) - Math.max(0, Math.floor(left)),
-                h: Math.min(sh, Math.ceil(bottom)) - Math.max(0, Math.floor(top))
-              };
+              // Hip width (slightly narrower for shirt taper)
+              let leftHipX, rightHipX;
+              if (lh && rh && lh.score > 0.25 && rh.score > 0.25) {
+                leftHipX = Math.min(lh.x, rh.x) - shoulderW * 0.2;
+                rightHipX = Math.max(lh.x, rh.x) + shoulderW * 0.2;
+              } else {
+                leftHipX = leftX + shoulderW * 0.1;
+                rightHipX = rightX - shoulderW * 0.1;
+              }
+
+              // Clamp all points to image bounds
+              const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+              const topLeft = { x: clamp(leftX, 0, sw), y: clamp(neckY, 0, sh) };
+              const topRight = { x: clamp(rightX, 0, sw), y: clamp(neckY, 0, sh) };
+              const bottomRight = { x: clamp(rightHipX, 0, sw), y: clamp(bottomY, 0, sh) };
+              const bottomLeft = { x: clamp(leftHipX, 0, sw), y: clamp(bottomY, 0, sh) };
+
+              // Neck cutout (V-shape at top center to remove chin/neck area)
+              const neckCenterX = (ls.x + rs.x) / 2;
+              const neckWidth = shoulderW * 0.25;
+              const neckDepth = shoulderW * 0.05; // Very shallow — just remove neck skin
+
+              // Step 2: Create clipped version — only torso polygon is visible
+              const clipCanvas = document.createElement('canvas');
+              clipCanvas.width = sw;
+              clipCanvas.height = sh;
+              const clipCtx = clipCanvas.getContext('2d');
+
+              // Draw polygon clip path (torso shape)
+              clipCtx.beginPath();
+              // Start from top-left shoulder area
+              clipCtx.moveTo(topLeft.x, topLeft.y);
+              // Go to left side of neck
+              clipCtx.lineTo(clamp(neckCenterX - neckWidth, 0, sw), clamp(neckY, 0, sh));
+              // Neck V cutout
+              clipCtx.lineTo(neckCenterX, clamp(neckY + neckDepth, 0, sh));
+              // Right side of neck
+              clipCtx.lineTo(clamp(neckCenterX + neckWidth, 0, sw), clamp(neckY, 0, sh));
+              // Top-right shoulder area
+              clipCtx.lineTo(topRight.x, topRight.y);
+              // Down to bottom-right hip
+              clipCtx.lineTo(bottomRight.x, bottomRight.y);
+              // Across to bottom-left hip
+              clipCtx.lineTo(bottomLeft.x, bottomLeft.y);
+              clipCtx.closePath();
+              clipCtx.clip();
+
+              // Draw the original (bg-removed) image inside the clip
+              clipCtx.drawImage(srcCanvas, 0, 0);
+              clipped = true;
+
+              // Copy clipped result back
+              srcCtx.clearRect(0, 0, sw, sh);
+              srcCtx.drawImage(clipCanvas, 0, 0);
             }
           }
         } catch (e) {
-          console.warn('Pose crop failed, falling back to alpha-trim:', e);
+          console.warn('Pose-based crop failed:', e);
         }
       }
 
-      // Step 2: Apply crop bounds (pose-based or alpha-trim)
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = sw;
-      tempCanvas.height = sh;
-      const tempCtx = tempCanvas.getContext('2d');
-      tempCtx.drawImage(img, 0, 0);
-
-      if (!cropBounds) {
-        // Fallback: trim transparent pixels
-        cropBounds = getAlphaBounds(tempCtx, sw, sh);
-      }
-
-      if (!cropBounds || cropBounds.w < 10 || cropBounds.h < 10) {
-        resolve(dataUrl); // Too small or no valid bounds
+      // Step 3: Alpha-trim (remove all transparent padding)
+      const bounds = getAlphaBounds(srcCtx, sw, sh);
+      if (!bounds || bounds.w < 10 || bounds.h < 10) {
+        resolve(dataUrl);
         return;
       }
 
-      // Step 3: Extract cropped region
-      const cropCanvas = document.createElement('canvas');
-      cropCanvas.width = cropBounds.w;
-      cropCanvas.height = cropBounds.h;
-      const cropCtx = cropCanvas.getContext('2d');
-      cropCtx.drawImage(
-        tempCanvas,
-        cropBounds.x, cropBounds.y, cropBounds.w, cropBounds.h,
-        0, 0, cropBounds.w, cropBounds.h
+      // Step 4: Extract the tight crop
+      const finalCanvas = document.createElement('canvas');
+      finalCanvas.width = bounds.w;
+      finalCanvas.height = bounds.h;
+      const finalCtx = finalCanvas.getContext('2d');
+      finalCtx.drawImage(
+        srcCanvas,
+        bounds.x, bounds.y, bounds.w, bounds.h,
+        0, 0, bounds.w, bounds.h
       );
 
-      // Step 4: Clean up — remove pixels outside the body mask
-      // Re-alpha any remaining non-garment pixels at edges
-      const cropData = cropCtx.getImageData(0, 0, cropBounds.w, cropBounds.h);
-      let hasTransparent = false;
-      for (let i = 0; i < cropData.data.length; i += 4) {
-        if (cropData.data[i + 3] < 30) {
-          cropData.data[i + 3] = 0;
-          hasTransparent = true;
-        }
-      }
-      if (hasTransparent) cropCtx.putImageData(cropData, 0, 0);
-
-      // Step 5: Final alpha-trim on the cropped result
-      const finalBounds = getAlphaBounds(cropCtx, cropBounds.w, cropBounds.h);
-      if (finalBounds && finalBounds.w > 10 && finalBounds.h > 10) {
-        const finalCanvas = document.createElement('canvas');
-        finalCanvas.width = finalBounds.w;
-        finalCanvas.height = finalBounds.h;
-        const finalCtx = finalCanvas.getContext('2d');
-        finalCtx.drawImage(
-          cropCanvas,
-          finalBounds.x, finalBounds.y, finalBounds.w, finalBounds.h,
-          0, 0, finalBounds.w, finalBounds.h
-        );
-        resolve(finalCanvas.toDataURL('image/png'));
-      } else {
-        resolve(cropCanvas.toDataURL('image/png'));
-      }
+      resolve(finalCanvas.toDataURL('image/png'));
     };
     img.src = dataUrl;
   });
@@ -305,7 +319,7 @@ function getAlphaBounds(ctx, w, h) {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = (y * w + x) * 4;
-      if (data[idx + 3] > 30) { // Non-transparent
+      if (data[idx + 3] > 30) {
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
         if (y < minY) minY = y;
@@ -317,7 +331,6 @@ function getAlphaBounds(ctx, w, h) {
 
   if (!found) return null;
 
-  // Add small padding
   const pad = 4;
   minX = Math.max(0, minX - pad);
   minY = Math.max(0, minY - pad);
@@ -345,40 +358,19 @@ async function getPose(videoElement) {
 }
 
 // ═══════════════════════════════════════════
-// AR OVERLAY — PRODUCTION QUALITY
+// AR OVERLAY — Fixed Alignment
 // ═══════════════════════════════════════════
 //
-// WHY THE PREVIOUS VERSION LOOKED "FLOATING":
+// ALIGNMENT FIX:
+// Previously the garment was centered on a point BELOW the shoulders,
+// which caused the top of the garment image to appear at chest level
+// (looking "upside down" when the captured image still had head/neck).
 //
-// 1. TRANSPARENCY DESTROYED: Seller compressed garment to JPEG,
-//    which flattens the alpha channel → garment becomes a rectangle.
-//    FIX: Use PNG throughout the pipeline.
-//
-// 2. NO COORDINATE SCALING: MoveNet returns keypoints in the video's
-//    native pixel space (e.g. 1280×720). But the <canvas> overlay may
-//    be sized differently. If you draw at raw keypoint coordinates
-//    without scaling, the garment lands in the wrong spot.
-//    FIX: Scale using videoW/videoH → canvasW/canvasH ratio.
-//
-// 3. NO MIRROR: Front-facing camera is mirrored in <video> but the
-//    canvas was not mirrored, so the garment moved opposite.
-//    FIX: CSS transform: scaleX(-1) on both video and canvas.
-//
-// 4. HARD RESET: On low confidence, resetSmoothing() caused jarring
-//    jumps. FIX: Fade opacity down instead, keep last known position.
-//
-// 5. GARMENT NOT CROPPED: The image included background and body parts,
-//    causing a rectangular "sticker" look.
-//    FIX: Auto-crop function trims to garment-only bounds.
-//
-// NEW FEATURES:
-//   - Adaptive velocity-aware smoothing
-//   - Shoulder tilt rotation
-//   - Depth shadow for 3D feel
-//   - Confidence-based opacity fade
-//   - Proper translate+rotate rendering
+// Now that the garment image is properly cropped (just the shirt),
+// we draw it so its TOP EDGE aligns with the buyer's shoulder line
+// and it extends DOWN to the hips. The anchor point is the shoulder
+// midpoint, and the garment hangs downward from there.
 
-// Track frames without detection for graceful fade
 let framesWithoutPose = 0;
 const MAX_FADE_FRAMES = 15;
 
@@ -387,20 +379,18 @@ function drawAROverlay(ctx, canvasWidth, canvasHeight, garmentImg, keypoints, vi
 
   if (!garmentImg) return;
 
-  // ── No keypoints: graceful fade out ──
+  // No keypoints: graceful fade
   if (!keypoints) {
     framesWithoutPose++;
     if (framesWithoutPose > MAX_FADE_FRAMES || smoothing.x === null) return;
-
-    // Draw at last known position with fading opacity
     const fadeAlpha = Math.max(0, 0.88 * (1 - framesWithoutPose / MAX_FADE_FRAMES));
-    drawGarmentAtSmoothedPosition(ctx, canvasWidth, canvasHeight, garmentImg, fadeAlpha);
+    drawGarmentAtSmoothedPosition(ctx, garmentImg, fadeAlpha);
     return;
   }
 
   framesWithoutPose = 0;
 
-  // ── Step 1: Extract keypoints by name ──
+  // Extract keypoints
   const kp = {};
   keypoints.forEach(k => { kp[k.name] = k; });
 
@@ -409,25 +399,21 @@ function drawAROverlay(ctx, canvasWidth, canvasHeight, garmentImg, keypoints, vi
   const lh = kp['left_hip'];
   const rh = kp['right_hip'];
 
-  // Need at least both shoulders
   if (!ls || !rs) return;
 
-  // ── Confidence-based opacity ──
+  // Confidence-based opacity
   const shoulderConf = Math.min(ls.score || 0, rs.score || 0);
   if (shoulderConf < 0.15) {
-    // Too low — use fade behavior
     framesWithoutPose++;
     if (smoothing.x !== null) {
       const fadeAlpha = Math.max(0, 0.88 * (1 - framesWithoutPose / MAX_FADE_FRAMES));
-      drawGarmentAtSmoothedPosition(ctx, canvasWidth, canvasHeight, garmentImg, fadeAlpha);
+      drawGarmentAtSmoothedPosition(ctx, garmentImg, fadeAlpha);
     }
     return;
   }
-
-  // Confidence maps to alpha: 0.15→0.4 confidence = 0.3→0.88 alpha
   const confAlpha = 0.3 + Math.min(1, (shoulderConf - 0.15) / 0.5) * 0.58;
 
-  // ── Step 2: Scale keypoints from video space → canvas space ──
+  // Scale keypoints: video space → canvas space
   const videoW = videoElement ? (videoElement.videoWidth || canvasWidth) : canvasWidth;
   const videoH = videoElement ? (videoElement.videoHeight || canvasHeight) : canvasHeight;
   const scaleX = canvasWidth / videoW;
@@ -436,57 +422,62 @@ function drawAROverlay(ctx, canvasWidth, canvasHeight, garmentImg, keypoints, vi
   const lsx = ls.x * scaleX, lsy = ls.y * scaleY;
   const rsx = rs.x * scaleX, rsy = rs.y * scaleY;
 
-  // ── Step 3: Calculate garment dimensions ──
+  // Shoulder measurements
   const shoulderWidth = Math.hypot(rsx - lsx, rsy - lsy);
-
-  // Guard: if shoulders are too close, detection is probably wrong
   if (shoulderWidth < 20) return;
 
-  // Width: 1.8× shoulder distance for natural drape (covers sleeves)
+  // Garment width: 1.8× shoulder distance
   const rawGarmentWidth = shoulderWidth * 1.8;
 
+  // Garment height: based on shoulder-to-hip distance
   let rawGarmentHeight;
   if (lh && rh && lh.score > 0.25 && rh.score > 0.25) {
-    // Use actual shoulder-to-hip distance
-    const lhx = lh.x * scaleX, lhy = lh.y * scaleY;
-    const rhx = rh.x * scaleX, rhy = rh.y * scaleY;
+    const lhy = lh.y * scaleY;
+    const rhy = rh.y * scaleY;
     const hipMidY = (lhy + rhy) / 2;
     const shoulderMidY = (lsy + rsy) / 2;
     rawGarmentHeight = (hipMidY - shoulderMidY) * 1.35;
   } else {
-    // Estimate: garment height ≈ 1.3× width (standard shirt ratio)
     rawGarmentHeight = rawGarmentWidth * 1.3;
   }
-
-  // Minimum dimensions
   rawGarmentHeight = Math.max(rawGarmentHeight, 60);
 
-  // ── Step 4: Calculate center position ──
-  const rawCenterX = (lsx + rsx) / 2;
-  // Shift down by 35% of garment height to center on torso (not on shoulder line)
-  const rawCenterY = (lsy + rsy) / 2 + rawGarmentHeight * 0.35;
+  // ════════════════════════════════════════
+  // ANCHOR POINT: Shoulder midpoint
+  // The garment TOP edge sits at shoulder level,
+  // and the garment HANGS DOWNWARD from there
+  // ════════════════════════════════════════
+  const shoulderMidX = (lsx + rsx) / 2;
+  const shoulderMidY = (lsy + rsy) / 2;
 
-  // ── Step 5: Calculate shoulder tilt angle ──
+  // The center of the garment image is at:
+  //   Y = shoulderMidY + garmentHeight/2
+  // (garment starts at shoulders, extends down to hips)
+  // Small upward offset (-0.05) so neckline sits slightly above shoulder line
+  const rawCenterX = shoulderMidX;
+  const rawCenterY = shoulderMidY + rawGarmentHeight * 0.45;
+
+  // Shoulder tilt angle
   const rawAngle = Math.atan2(rsy - lsy, rsx - lsx);
 
-  // ── Step 6: Apply adaptive EMA smoothing ──
+  // Apply smoothing
   const cx = smooth('x', rawCenterX);
   const cy = smooth('y', rawCenterY);
   const gw = smooth('w', rawGarmentWidth);
   const gh = smooth('h', rawGarmentHeight);
   const angle = smooth('angle', rawAngle);
 
-  // ── Step 7: Draw shadow for depth ──
+  // Draw shadow for depth
   ctx.save();
-  ctx.translate(cx + 3, cy + 8);
+  ctx.translate(cx + 3, cy + 6);
   ctx.rotate(angle);
-  ctx.globalAlpha = 0.12;
-  ctx.filter = 'blur(12px)';
+  ctx.globalAlpha = 0.1;
+  ctx.filter = 'blur(10px)';
   ctx.drawImage(garmentImg, -gw / 2, -gh / 2, gw, gh);
   ctx.filter = 'none';
   ctx.restore();
 
-  // ── Step 8: Draw garment with rotation ──
+  // Draw garment
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
@@ -495,12 +486,8 @@ function drawAROverlay(ctx, canvasWidth, canvasHeight, garmentImg, keypoints, vi
   ctx.restore();
 }
 
-/**
- * Draw garment at the last smoothed position (for fade-out frames)
- */
-function drawGarmentAtSmoothedPosition(ctx, canvasWidth, canvasHeight, garmentImg, alpha) {
+function drawGarmentAtSmoothedPosition(ctx, garmentImg, alpha) {
   if (smoothing.x === null || alpha <= 0) return;
-
   ctx.save();
   ctx.translate(smoothing.x, smoothing.y);
   if (smoothing.angle !== null) ctx.rotate(smoothing.angle);
@@ -535,7 +522,6 @@ function drawMannequinFaceSwap(canvas, garmentImg, videoElement, faceBox) {
   const w = canvas.width;
   const h = canvas.height;
 
-  // Background
   ctx.fillStyle = '#0a0a0f';
   ctx.fillRect(0, 0, w, h);
 
@@ -567,7 +553,7 @@ function drawMannequinFaceSwap(canvas, garmentImg, videoElement, faceBox) {
     ctx.restore();
   }
 
-  // Face swap onto mannequin head
+  // Face swap
   if (faceBox && videoElement) {
     try {
       const faceCanvas = document.createElement('canvas');
